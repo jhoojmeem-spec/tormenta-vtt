@@ -1,0 +1,268 @@
+MODELAGEM_VTT — Guia Mestre de Desenvolvimento do VTT Tormenta20
+
+PROPÓSITO
+
+Este arquivo é uma FONTE PERMANENTE DE CONTEXTO para o desenvolvimento
+do projeto.
+
+Você (Claude) deve consultar este documento durante TODO o ciclo de
+desenvolvimento.
+
+Este projeto é um VTT desktop simplificado inspirado em Roll20/Foundry,
+porém focado EXCLUSIVAMENTE em Tormenta20.
+
+Objetivo principal:
+
+-   experiência rápida
+-   fluidez de sessão
+-   automação máxima
+-   baixo atrito
+-   uso pessoal
+-   arquitetura simples
+-   executável local (.exe)
+
+NÃO realizar overengineering.
+
+------------------------------------------------------------------------
+
+LIVROS OFICIAIS DISPONÍVEIS NA RAIZ DO PROJETO
+
+Durante todo o desenvolvimento, considere que existirão 3 arquivos PDF
+localizados na raiz do projeto.
+
+Eles são fontes canônicas de informação do sistema.
+
+Claude DEVE utilizá-los como referência primária para:
+
+-   regras oficiais
+-   combate
+-   atributos
+-   perícias
+-   magias
+-   equipamentos
+-   condições
+-   poderes
+-   classes
+-   raças
+-   ameaças
+-   lore
+-   ambientação
+-   nomenclaturas oficiais
+
+PDFs presentes:
+
+1.  Livro Básico Tormenta20
+2.  Ameaças de Arton
+3.  Atlas de Arton
+
+------------------------------------------------------------------------
+
+RESPONSABILIDADE DE CADA LIVRO
+
+1 — Livro Básico Tormenta20
+
+Fonte principal de:
+
+-   regras do sistema
+-   criação de personagem
+-   atributos
+-   perícias
+-   testes
+-   combate
+-   equipamentos
+-   magias
+-   poderes gerais
+-   classes
+-   raças/origens
+-   condições
+-   economia
+-   progressão
+
+Este livro deve alimentar:
+
+Sistemas do software:
+
+-   ficha de personagem
+-   automação de combate
+-   parser de dados
+-   cálculo de testes
+-   iniciativa
+-   recursos
+-   ataques
+-   defesa
+-   mana
+-   efeitos
+-   macros
+-   scripting hooks
+
+------------------------------------------------------------------------
+
+2 — Ameaças de Arton
+
+Fonte principal de:
+
+-   criaturas
+-   monstros
+-   NPCs
+-   ameaças
+-   estatísticas de combate
+-   habilidades especiais
+-   templates de inimigos
+
+Este livro deve alimentar:
+
+Sistemas:
+
+-   banco de inimigos
+-   encounter builder
+-   combat tracker
+-   spawn rápido
+-   importação de ameaças
+-   automação de IA futura (opcional)
+
+------------------------------------------------------------------------
+
+3 — Atlas de Arton
+
+Fonte principal de:
+
+-   lore
+-   geografia
+-   reinos
+-   facções
+-   religiões
+-   culturas
+-   história do cenário
+
+Este livro deve alimentar:
+
+Sistemas:
+
+-   journals
+-   handouts
+-   campanha
+-   organização narrativa
+-   NPC database
+-   worldbuilding tools
+-   referências rápidas de cenário
+
+------------------------------------------------------------------------
+
+DIRETRIZES DE EXTRAÇÃO DE CONTEÚDO
+
+Claude deve assumir que os PDFs podem ser processados posteriormente.
+
+Preparar arquitetura para:
+
+Parser documental futuro.
+
+Criar módulos desacoplados:
+
+/content /importers /parsers /rules_engine
+
+Possível pipeline:
+
+PDF → Extraction → Structured JSON → Internal Database.
+
+------------------------------------------------------------------------
+
+ESTRUTURA DE DADOS ESPERADA
+
+Preparar modelos para:
+
+Classes
+
+nome atributos_base pv pm habilidades progressão poderes
+
+Raças
+
+nome atributos habilidades movimento idiomas
+
+Poderes
+
+nome tipo pré-requisitos efeitos
+
+Magias
+
+nome círculo escola alcance duração efeitos custo_pm
+
+Condições
+
+nome modificadores efeitos stack_rules
+
+Ameaças
+
+nome tipo nível atributos ataques habilidades tesouro
+
+------------------------------------------------------------------------
+
+PRINCÍPIO ARQUITETURAL
+
+NUNCA hardcodar regras profundamente.
+
+Preferir:
+
+Rule Engine.
+
+Data Driven Design.
+
+Exemplo:
+
+Classes, magias, poderes, monstros e condições devem poder vir
+futuramente de JSON gerado dos PDFs.
+
+------------------------------------------------------------------------
+
+POLÍTICA DE DESENVOLVIMENTO
+
+Claude deve:
+
+-   gerar código real
+-   evitar pseudo-código
+-   entregar módulos completos
+-   manter compatibilidade incremental
+-   preservar simplicidade
+
+------------------------------------------------------------------------
+
+STACK PREFERENCIAL
+
+Godot 4 + C#
+
+Motivos:
+
+-   build .exe
+-   UI integrada
+-   2D forte
+-   tokens/mapas simples
+-   networking razoável
+-   fluxo parecido com jogo
+
+------------------------------------------------------------------------
+
+MVP PRIORITÁRIO
+
+Ordem obrigatória:
+
+1.  Inicialização do aplicativo
+2.  UI base
+3.  Sistema de mapas
+4.  Tokens
+5.  Dados
+6.  Chat
+7.  Fichas
+8.  Combate
+9.  Persistência
+10. Multiplayer
+
+------------------------------------------------------------------------
+
+REGRA ABSOLUTA
+
+O software deve sempre priorizar:
+
+“abrir rápido, jogar rápido, automatizar rápido”.
+
+Não perseguir arquitetura enterprise.
+
+Não criar complexidade desnecessária.
