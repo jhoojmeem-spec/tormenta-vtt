@@ -1,0 +1,229 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource path="res://Scripts/Main.cs" type="Script" id=1]
+[ext_resource path="res://Scripts/MapController.cs" type="Script" id=2]
+[ext_resource path="res://Scripts/GridOverlay.cs" type="Script" id=3]
+[ext_resource path="res://Scripts/ChatController.cs" type="Script" id=4]
+
+[node name="Main" type="Control"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource( 1 )
+
+[node name="Toolbar" type="Panel" parent="."]
+anchor_right = 1.0
+margin_bottom = 50.0
+custom_styles/panel = null
+
+[node name="TopButtons" type="HBoxContainer" parent="Toolbar"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 8.0
+margin_top = 8.0
+margin_right = -8.0
+margin_bottom = -8.0
+custom_constants/separation = 8
+
+[node name="NewCampaignButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Nova Campanha"
+
+[node name="LoadCampaignButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Carregar Campanha"
+
+[node name="SaveCampaignButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Salvar Campanha"
+
+[node name="CampaignName" type="LineEdit" parent="Toolbar/TopButtons"]
+placeholder_text = "Nome da campanha"
+text = "Nova Campanha"
+
+[node name="ImportMapButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Importar Mapa"
+
+[node name="ToggleGridButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Grid"
+
+[node name="SpawnTokenButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Criar Token"
+
+[node name="ImportTokenButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Importar Token"
+
+[node name="RollInitButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Iniciativa"
+
+[node name="MainArea" type="HBoxContainer" parent="."]
+anchor_left = 0.0
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_top = 50.0
+margin_bottom = -220.0
+margin_left = 0.0
+margin_right = 0.0
+custom_constants/separation = 8
+
+[node name="AssetsPanel" type="Panel" parent="MainArea"]
+custom_styles/panel = null
+rect_min_size = Vector2(220, 0)
+
+[node name="AssetsVBox" type="VBoxContainer" parent="AssetsPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 10.0
+margin_top = 10.0
+margin_right = -10.0
+margin_bottom = -10.0
+custom_constants/separation = 8
+
+[node name="AssetsLabel" type="Label" parent="AssetsPanel/AssetsVBox"]
+text = "Assets"
+
+[node name="AssetList" type="TextEdit" parent="AssetsPanel/AssetsVBox"]
+read_only = true
+text = "Lista de tokens e macros aparecerá aqui no futuro."
+
+[node name="MapPanel" type="Panel" parent="MainArea"]
+custom_styles/panel = null
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource( 2 )
+
+[node name="MapTexture" type="TextureRect" parent="MapPanel"]
+expand = false
+stretch_mode = 0
+
+[node name="TokenLayer" type="Control" parent="MapPanel/MapTexture"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 0.0
+margin_top = 0.0
+margin_right = 0.0
+margin_bottom = 0.0
+
+[node name="GridOverlay" type="Control" parent="MapPanel/MapTexture"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 0.0
+margin_top = 0.0
+margin_right = 0.0
+margin_bottom = 0.0
+script = ExtResource( 3 )
+
+[node name="SidebarPanel" type="Panel" parent="MainArea"]
+custom_styles/panel = null
+rect_min_size = Vector2(260, 0)
+
+[node name="SidebarVBox" type="VBoxContainer" parent="SidebarPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 10.0
+margin_top = 10.0
+margin_right = -10.0
+margin_bottom = -10.0
+custom_constants/separation = 8
+
+[node name="SelectionTitle" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Ficha Selecionada"
+
+[node name="SelectedName" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Nenhum token selecionado"
+
+[node name="SelectedStats" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = ""
+
+[node name="StatsGrid" type="GridContainer" parent="SidebarPanel/SidebarVBox"]
+columns = 2
+custom_constants/separation = 4
+
+[node name="HPLabel" type="Label" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+text = "PV"
+
+[node name="HPInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+min_value = 0.0
+max_value = 999.0
+step = 1.0
+
+[node name="PMLabel" type="Label" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+text = "PM"
+
+[node name="PMInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+min_value = 0.0
+max_value = 999.0
+step = 1.0
+
+[node name="DefenseLabel" type="Label" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+text = "Defesa"
+
+[node name="DefenseInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+min_value = 0.0
+max_value = 99.0
+step = 1.0
+
+[node name="InitiativeLabel" type="Label" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+text = "Iniciativa"
+
+[node name="InitiativeInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/StatsGrid"]
+min_value = -20.0
+max_value = 50.0
+step = 1.0
+
+[node name="ApplyStatsButton" type="Button" parent="SidebarPanel/SidebarVBox"]
+text = "Aplicar estatísticas"
+
+[node name="ChatPanel" type="Panel" parent="."]
+anchor_left = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_top = -220.0
+margin_bottom = 0.0
+custom_styles/panel = null
+script = ExtResource( 4 )
+
+[node name="ChatVBox" type="VBoxContainer" parent="ChatPanel"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+margin_left = 10.0
+margin_top = 10.0
+margin_right = -10.0
+margin_bottom = -10.0
+custom_constants/separation = 8
+
+[node name="ChatLabel" type="Label" parent="ChatPanel/ChatVBox"]
+text = "Chat"
+
+[node name="ChatLog" type="RichTextLabel" parent="ChatPanel/ChatVBox"]
+bbcode_enabled = true
+scroll_active = true
+custom_fonts/font = null
+percent_visible = 1.0
+rect_min_size = Vector2(0, 140)
+
+[node name="ChatInputRow" type="HBoxContainer" parent="ChatPanel/ChatVBox"]
+custom_constants/separation = 8
+
+[node name="ChatInput" type="LineEdit" parent="ChatPanel/ChatVBox/ChatInputRow"]
+placeholder_text = "Digite /roll 1d20+7 ou mensagem..."
+
+[node name="SendChatButton" type="Button" parent="ChatPanel/ChatVBox/ChatInputRow"]
+text = "Enviar"
+
+[node name="MapFileDialog" type="FileDialog" parent="."]
+access = 1
+mode = 0
+filters = ["*.png ; PNG", "*.jpg ; JPG", "*.jpeg ; JPEG"]
+
+[node name="TokenFileDialog" type="FileDialog" parent="."]
+access = 1
+mode = 0
+filters = ["*.png ; PNG", "*.jpg ; JPG", "*.jpeg ; JPEG"]
+
+[node name="CampaignOpenDialog" type="FileDialog" parent="."]
+access = 1
+mode = 0
+filters = ["*.json ; Campanha JSON"]
+
+[node name="CampaignSaveDialog" type="FileDialog" parent="."]
+access = 1
+mode = 1
+filters = ["*.json ; Campanha JSON"]

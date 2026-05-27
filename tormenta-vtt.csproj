@@ -1,0 +1,14 @@
+<Project Sdk="Godot.NET.Sdk/4.4.0">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>TormentaVTT</AssemblyName>
+    <RootNamespace>TormentaVTT</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Scripts/**/*.cs" />
+  </ItemGroup>
+</Project>

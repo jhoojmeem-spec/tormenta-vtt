@@ -1,0 +1,28 @@
+# Godot
+.import/
+.export/
+.cache/
+*.tmp
+*.lock
+*.import
+*.mono
+*.csproj.user
+*.suo
+*.userprefs
+*.user
+*.vcxproj.user
+*.log
+
+# Mono
+bin/
+obj/
+.mono/
+
+# Visual Studio
+.vs/
+*.pidb
+*.opendb
+*.db
+*.user
+*.userosscache
+*.sln.docstates
