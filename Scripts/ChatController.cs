@@ -79,7 +79,8 @@ namespace TormentaVTT.UI
                 _ => string.Empty,
             };
 
-            _chatLog.ParseBbcode($"[b]{prefix}{message.Sender}[/b] ({message.TimeCode}): {message.Text}\n");
+            var formatted = $"[b]{prefix}{message.Sender}[/b] ({message.TimeCode}): {message.Text}\n";
+            _chatLog.Text += formatted;
             _chatLog.ScrollToLine(_chatLog.GetLineCount());
         }
 

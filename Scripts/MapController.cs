@@ -1,6 +1,7 @@
 using Godot;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using TormentaVTT.Models;
 
 namespace TormentaVTT.UI
@@ -17,6 +18,11 @@ namespace TormentaVTT.UI
 
         public TokenData? SelectedToken { get; private set; }
         public event Action<TokenData?>? SelectedTokenChanged;
+        public event Action<TokenData>? TokenAdded;
+        public event Action<TokenData>? TokenRemoved;
+
+        public float CurrentZoom => _mapTexture.Scale.X;
+        public bool IsGridEnabled => _gridOverlay.Visible;
 
         public override void _Ready()
         {
@@ -79,6 +85,9 @@ namespace TormentaVTT.UI
             if (!string.IsNullOrEmpty(campaign.MapImagePath) && System.IO.File.Exists(campaign.MapImagePath))
             {
                 LoadMap(campaign.MapImagePath);
+                SetZoom(new Vector2(campaign.Zoom, campaign.Zoom));
+                _gridOverlay.Visible = campaign.GridEnabled;
+                _gridOverlay.QueueRedraw();
             }
 
             foreach (var node in _tokenNodes)
@@ -104,6 +113,16 @@ namespace TormentaVTT.UI
             _tokenLayer.AddChild(tokenControl);
             _tokenNodes.Add(tokenControl);
             UpdateSelectedToken(tokenControl, false);
+            TokenAdded?.Invoke(token);
+        }
+
+        public void SelectToken(TokenData token)
+        {
+            var tokenControl = _tokenNodes.FirstOrDefault(node => node.Data == token);
+            if (tokenControl == null)
+                return;
+
+            UpdateSelectedToken(tokenControl, true);
         }
 
         public void ToggleGrid()
@@ -131,7 +150,35 @@ namespace TormentaVTT.UI
 
         private void OnTokenDragged(TokenControl tokenControl)
         {
+            tokenControl.Position = SnapToGrid(tokenControl.Position);
             tokenControl.Data.Position = tokenControl.Position;
+        }
+
+        public void RemoveToken(TokenData token)
+        {
+            var tokenNode = _tokenNodes.FirstOrDefault(node => node.Data == token);
+            if (tokenNode == null)
+                return;
+
+            TokenRemoved?.Invoke(token);
+            tokenNode.QueueFree();
+            _tokenNodes.Remove(tokenNode);
+
+            if (SelectedToken == token)
+            {
+                SelectedToken = null;
+                SelectedTokenChanged?.Invoke(null);
+            }
+        }
+
+        private Vector2 SnapToGrid(Vector2 position)
+        {
+            if (!_gridOverlay.Visible || _gridOverlay.CellSize <= 0)
+                return position;
+
+            var x = Mathf.Round(position.X / _gridOverlay.CellSize) * _gridOverlay.CellSize;
+            var y = Mathf.Round(position.Y / _gridOverlay.CellSize) * _gridOverlay.CellSize;
+            return new Vector2(x, y);
         }
 
         private void UpdateSelectedToken(TokenControl tokenControl, bool notify)
@@ -146,6 +193,16 @@ namespace TormentaVTT.UI
             {
                 SelectedTokenChanged?.Invoke(SelectedToken);
             }
+        }
+
+        public Vector2 GetViewportCenterMapPosition()
+        {
+            // Center of this control (the MapController) in local coords
+            var viewportCenter = Size / 2f;
+            // Convert from viewport (MapController local) to map texture local coordinates
+            // Account for map texture position (panning) and scale (zoom)
+            var mapPos = (viewportCenter - _mapTexture.Position) / _mapTexture.Scale;
+            return mapPos;
         }
     }
 }

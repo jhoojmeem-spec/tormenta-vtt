@@ -52,6 +52,15 @@ text = "Importar Token"
 [node name="RollInitButton" type="Button" parent="Toolbar/TopButtons"]
 text = "Iniciativa"
 
+[node name="StartCombatButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Iniciar Combate"
+
+[node name="PrevTurnButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Turno Anterior"
+
+[node name="NextTurnButton" type="Button" parent="Toolbar/TopButtons"]
+text = "Próximo Turno"
+
 [node name="MainArea" type="HBoxContainer" parent="."]
 anchor_left = 0.0
 anchor_top = 0.0
@@ -79,9 +88,12 @@ custom_constants/separation = 8
 [node name="AssetsLabel" type="Label" parent="AssetsPanel/AssetsVBox"]
 text = "Assets"
 
-[node name="AssetList" type="TextEdit" parent="AssetsPanel/AssetsVBox"]
-read_only = true
-text = "Lista de tokens e macros aparecerá aqui no futuro."
+[node name="AssetList" type="ItemList" parent="AssetsPanel/AssetsVBox"]
+size_flags_vertical = 3
+rect_min_size = Vector2(0, 180)
+select_mode = 2
+allow_rmb_select = false
+hide_folding = true
 
 [node name="MapPanel" type="Panel" parent="MainArea"]
 custom_styles/panel = null
@@ -171,6 +183,55 @@ step = 1.0
 [node name="ApplyStatsButton" type="Button" parent="SidebarPanel/SidebarVBox"]
 text = "Aplicar estatísticas"
 
+[node name="RemoveTokenButton" type="Button" parent="SidebarPanel/SidebarVBox"]
+text = "Remover token"
+
+[node name="InitiativeTitle" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Iniciativa (Combate)"
+
+[node name="InitiativeVBox" type="VBoxContainer" parent="SidebarPanel/SidebarVBox"]
+custom_constants/separation = 4
+
+[node name="InitiativeOrderList" type="ItemList" parent="SidebarPanel/SidebarVBox/InitiativeVBox"]
+size_flags_vertical = 3
+rect_min_size = Vector2(0, 180)
+select_mode = 1
+allow_rmb_select = false
+hide_folding = true
+
+[node name="InitiativeMoveButtons" type="HBoxContainer" parent="SidebarPanel/SidebarVBox/InitiativeVBox"]
+custom_constants/separation = 4
+
+[node name="MoveUpButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeMoveButtons"]
+text = "Subir"
+
+[node name="MoveDownButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeMoveButtons"]
+text = "Descer"
+
+[node name="InitiativeActions" type="HBoxContainer" parent="SidebarPanel/SidebarVBox/InitiativeVBox"]
+custom_constants/separation = 4
+
+[node name="DamageInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions"]
+min_value = 0.0
+max_value = 999.0
+step = 1.0
+rect_min_size = Vector2(60, 0)
+
+[node name="DamageButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions"]
+text = "Dano"
+
+[node name="AttackButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions"]
+text = "Atacar"
+
+[node name="RerollButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions"]
+text = "Reroll"
+
+[node name="EndCombatButton" type="Button" parent="SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions"]
+text = "Encerrar Combate"
+
+[node name="CombatStatusLabel" type="Label" parent="SidebarPanel/SidebarVBox/InitiativeVBox"]
+text = "Combate inativo"
+
 [node name="ChatPanel" type="Panel" parent="."]
 anchor_left = 0.0
 anchor_right = 1.0
@@ -221,9 +282,9 @@ filters = ["*.png ; PNG", "*.jpg ; JPG", "*.jpeg ; JPEG"]
 [node name="CampaignOpenDialog" type="FileDialog" parent="."]
 access = 1
 mode = 0
-filters = ["*.json ; Campanha JSON"]
+filters = ["*.json ; JSON"]
 
 [node name="CampaignSaveDialog" type="FileDialog" parent="."]
 access = 1
-mode = 1
-filters = ["*.json ; Campanha JSON"]
+mode = 2
+filters = ["*.json ; JSON"]
