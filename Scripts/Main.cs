@@ -12,12 +12,35 @@ namespace TormentaVTT.UI
         private ChatController _chatController = null!;
         private Campaign _currentCampaign = Campaign.CreateDefault();
         private DiceParser _diceParser = new();
+        private RuleEngine _ruleEngine = new();
         private CombatController _combatController = new();
+
+        private readonly (string NodeName, string AttributeName)[] _attributeInputs = new[]
+        {
+            ("ForcaInput", "Força"),
+            ("DestrezaInput", "Destreza"),
+            ("ConstituicaoInput", "Constituição"),
+            ("InteligenciaInput", "Inteligência"),
+            ("SabedoriaInput", "Sabedoria"),
+            ("CarismaInput", "Carisma")
+        };
+
+        private readonly (string NodeName, string SkillName)[] _skillInputs = new[]
+        {
+            ("AtletismoInput", "Atletismo"),
+            ("AcrobaciaInput", "Acrobacia"),
+            ("FurtividadeInput", "Furtividade"),
+            ("PercepcaoInput", "Percepção"),
+            ("IntimidacaoInput", "Intimidação"),
+            ("LidarComAnimaisInput", "Lidar com Animais"),
+            ("PersuasaoInput", "Persuasão")
+        };
 
         public override void _Ready()
         {
             _mapController = GetNode<MapController>("MapPanel");
             _chatController = GetNode<ChatController>("ChatPanel");
+            _chatController.CommandTriggered += HandleChatCommand;
 
             GetNode<Button>("Toolbar/TopButtons/NewCampaignButton").Pressed += OnNewCampaignPressed;
             GetNode<Button>("Toolbar/TopButtons/LoadCampaignButton").Pressed += OnLoadCampaignPressed;
@@ -28,6 +51,8 @@ namespace TormentaVTT.UI
             GetNode<Button>("Toolbar/TopButtons/ImportTokenButton").Pressed += OnImportTokenPressed;
             GetNode<Button>("Toolbar/TopButtons/RollInitButton").Pressed += OnRollInitiativePressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/ApplyStatsButton").Pressed += OnApplyStatsPressed;
+            GetNode<Button>("SidebarPanel/SidebarVBox/AddConditionButton").Pressed += OnAddConditionPressed;
+            GetNode<Button>("SidebarPanel/SidebarVBox/RemoveConditionButton").Pressed += OnRemoveConditionPressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/RemoveTokenButton").Pressed += OnRemoveTokenPressed;
             var assets = GetNode<ItemList>("AssetsPanel/AssetsVBox/AssetList");
             assets.ItemSelected += index => OnAssetSelected(index);
@@ -132,7 +157,6 @@ namespace TormentaVTT.UI
 
         private void OnRollInitiativePressed()
         {
-            // Roll initiative for selected token only
             var selected = _mapController.SelectedToken;
             if (selected is null)
             {
@@ -140,8 +164,268 @@ namespace TormentaVTT.UI
                 return;
             }
 
-            var roll = new Random().Next(1, 21) + selected.Sheet.Initiative;
-            _chatController.AddSystemMessage($"{selected.Name} rolou iniciativa: {roll}");
+            var result = _ruleEngine.RollInitiative(selected.Sheet);
+            _chatController.AddSystemMessage($"{selected.Name} rolou iniciativa: {result.Total} [{result.Breakdown}]");
+        }
+
+        private bool HandleChatCommand(string text)
+        {
+            var parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                return false;
+
+            if (parts[0].Equals("/test", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var attribute = parts[1];
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para testar um atributo.");
+                    return true;
+                }
+
+                var result = _ruleEngine.RollAttributeCheck(selected.Sheet, attribute);
+                _chatController.AddSystemMessage($"Teste de {attribute} para {selected.Name}: {result.Total} [{result.Breakdown}]");
+                return true;
+            }
+
+            if (parts[0].Equals("/skill", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var skillName = string.Join(' ', parts[1..]);
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para testar uma perícia.");
+                    return true;
+                }
+
+                var result = _ruleEngine.RollSkillCheck(selected.Sheet, skillName);
+                _chatController.AddSystemMessage($"Teste de perícia {skillName} para {selected.Name}: {result.Total} [{result.Breakdown}]");
+                return true;
+            }
+
+            if (parts[0].Equals("/init", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Length > 1 && parts[1].Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var token in _currentCampaign.Tokens)
+                    {
+                        var initiativeResult = _ruleEngine.RollInitiative(token.Sheet);
+                        _chatController.AddSystemMessage($"{token.Name} rolou iniciativa: {initiativeResult.Total} [{initiativeResult.Breakdown}]");
+                    }
+                    return true;
+                }
+
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para rolar iniciativa.");
+                    return true;
+                }
+
+                var result = _ruleEngine.RollInitiative(selected.Sheet);
+                _chatController.AddSystemMessage($"{selected.Name} rolou iniciativa: {result.Total} [{result.Breakdown}]");
+                return true;
+            }
+
+            if (parts[0].Equals("/heal", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para curar.");
+                    return true;
+                }
+
+                var expression = string.Join(' ', parts[1..]);
+                var healResult = _diceParser.Evaluate(expression);
+                selected.Sheet.HP += healResult.Total;
+                _chatController.AddSystemMessage($"{selected.Name} recupera {healResult.Total} PV ({healResult.Breakdown}). PV atuais: {selected.Sheet.HP}.");
+                UpdateSelectionPanel(selected);
+                return true;
+            }
+
+            if (parts[0].Equals("/condition", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para gerenciar condições.");
+                    return true;
+                }
+
+                var action = parts[1].ToLowerInvariant();
+                    if (action == "add" && parts.Length > 2)
+                {
+                    var rawConditionText = string.Join(' ', parts[2..]);
+                    var (conditionName, duration) = ParseConditionText(rawConditionText);
+                    var alreadyPresent = selected.Sheet.HasCondition(conditionName);
+                    selected.Sheet.AddCondition(conditionName, duration);
+
+                    if (alreadyPresent)
+                    {
+                        _chatController.SystemMessage($"Condição '{conditionName}' atualizada em {selected.Name}.");
+                    }
+                    else
+                    {
+                        var durationText = duration > 0 ? $" por {duration} turnos" : string.Empty;
+                        _chatController.SystemMessage($"Condição '{conditionName}' adicionada a {selected.Name}{durationText}.");
+                    }
+
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (action == "remove" && parts.Length > 2)
+                {
+                    var conditionName = string.Join(' ', parts[2..]);
+                    selected.Sheet.RemoveCondition(conditionName);
+                    _chatController.SystemMessage($"Condição '{conditionName}' removida de {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (action == "list")
+                {
+                    _chatController.SystemMessage($"Condições de {selected.Name}: {selected.Sheet.GetConditionSummary()}");
+                    return true;
+                }
+
+                _chatController.SystemMessage("Uso: /condition add <nome> [turnos] | /condition remove <nome> | /condition list");
+                return true;
+            }
+
+            if (parts[0].Equals("/resist", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para gerenciar resistências.");
+                    return true;
+                }
+
+                var subAction = parts[1].ToLowerInvariant();
+                if (subAction == "add" && parts.Length > 3 && int.TryParse(parts[3], out var amount))
+                {
+                    var damageType = parts[2];
+                    selected.Sheet.SetResistance(damageType, amount);
+                    _chatController.SystemMessage($"Resistência {damageType}:{amount} adicionada a {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "remove" && parts.Length > 2)
+                {
+                    var damageType = parts[2];
+                    selected.Sheet.SetResistance(damageType, 0);
+                    _chatController.SystemMessage($"Resistência {damageType} removida de {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "list")
+                {
+                    _chatController.SystemMessage($"Resistências de {selected.Name}: {selected.Sheet.GetResistanceSummary()}");
+                    return true;
+                }
+
+                _chatController.SystemMessage("Uso: /resist add <tipo> <valor> | /resist remove <tipo> | /resist list");
+                return true;
+            }
+
+            if (parts[0].Equals("/vuln", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para gerenciar vulnerabilidades.");
+                    return true;
+                }
+
+                var subAction = parts[1].ToLowerInvariant();
+                if (subAction == "add" && parts.Length > 3 && int.TryParse(parts[3], out var amount))
+                {
+                    var damageType = parts[2];
+                    selected.Sheet.SetVulnerability(damageType, amount);
+                    _chatController.SystemMessage($"Vulnerabilidade {damageType}:{amount} adicionada a {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "remove" && parts.Length > 2)
+                {
+                    var damageType = parts[2];
+                    selected.Sheet.SetVulnerability(damageType, 0);
+                    _chatController.SystemMessage($"Vulnerabilidade {damageType} removida de {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "list")
+                {
+                    _chatController.SystemMessage($"Vulnerabilidades de {selected.Name}: {selected.Sheet.GetVulnerabilitySummary()}");
+                    return true;
+                }
+
+                _chatController.SystemMessage("Uso: /vuln add <tipo> <valor> | /vuln remove <tipo> | /vuln list");
+                return true;
+            }
+
+            if (parts[0].Equals("/attack", StringComparison.OrdinalIgnoreCase))
+            {
+                var attacker = _combatController.Current ?? _mapController.SelectedToken;
+                if (attacker == null)
+                {
+                    _chatController.SystemMessage("Selecione um token ou inicie o combate para atacar.");
+                    return true;
+                }
+
+                TokenData? target = null;
+                var damageExpression = "1d6+0";
+                if (parts.Length > 1)
+                {
+                    var candidate = parts[1];
+                    var maybeTarget = _currentCampaign.Tokens.Find(t => t.Name.Equals(candidate, StringComparison.OrdinalIgnoreCase));
+                    if (maybeTarget != null)
+                    {
+                        target = maybeTarget;
+                        if (parts.Length > 2)
+                        {
+                            damageExpression = string.Join(' ', parts[2..]);
+                        }
+                    }
+                    else
+                    {
+                        damageExpression = string.Join(' ', parts[1..]);
+                    }
+                }
+
+                if (target == null)
+                {
+                    target = _mapController.SelectedToken != attacker ? _mapController.SelectedToken : _currentCampaign.Tokens.Find(t => t.Id != attacker.Id);
+                }
+
+                if (target == null)
+                {
+                    _chatController.SystemMessage("Nenhum alvo disponível para atacar.");
+                    return true;
+                }
+
+                var (resolvedExpression, resolvedType) = ParseAttackDamage(parts, target != null ? 2 : 1);
+                var result = _ruleEngine.RollAttack(attacker, target, resolvedExpression, resolvedType);
+                var hitText = result.Hit ? "acerta" : "erra";
+                var specialText = result.IsCritical ? " CRÍTICO!" : result.IsFumble ? " FUMBLE!" : string.Empty;
+                var typeText = string.IsNullOrEmpty(resolvedType) ? string.Empty : $" de {resolvedType}";
+                _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name}{typeText} e {hitText} com {result.RollResult.Total} [{result.RollResult.Breakdown}] contra Defesa {target.Sheet.GetEffectiveDefense()}.{specialText}");
+                if (result.Hit)
+                {
+                    OnApplyDamage(target.Id, result.Damage);
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         private void OnStartCombatPressed()
@@ -281,18 +565,17 @@ namespace TormentaVTT.UI
             if (target == null)
                 return;
 
-            var attackRoll = new Random().Next(1, 21) + attacker.Sheet.Initiative;
             var amount = Math.Max(1, (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions/DamageInput").Value);
-            if (attackRoll >= target.Sheet.Defense)
+            var result = _ruleEngine.RollAttack(attacker, target, amount);
+            var hitText = result.Hit ? "acerta" : "erra";
+            var specialText = result.IsCritical ? " CRÍTICO!" : result.IsFumble ? " FUMBLE!" : string.Empty;
+            _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name} e {hitText} com {result.RollResult.Total} [{result.RollResult.Breakdown}] contra Defesa {target.Sheet.GetEffectiveDefense()}.{specialText}");
+            if (result.Hit)
             {
-                _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name} e acerta com {attackRoll} contra Defesa {target.Sheet.Defense}.");
-                OnApplyDamage(targetId, amount);
-            }
-            else
-            {
-                _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name} e erra com {attackRoll} contra Defesa {target.Sheet.Defense}.");
+                OnApplyDamage(targetId, result.Damage);
             }
 
+            TickCurrentTokenConditions();
             _combatController.AdvanceTurn();
             UpdateInitiativePanel();
         }
@@ -321,6 +604,100 @@ namespace TormentaVTT.UI
                 return string.Empty;
 
             return list.GetItemMetadata(selected[0]).ToString();
+        }
+
+        private static (string ConditionName, int Duration) ParseConditionText(string rawConditionText)
+        {
+            if (string.IsNullOrWhiteSpace(rawConditionText))
+                return (string.Empty, -1);
+
+            var parts = rawConditionText.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2)
+                return (rawConditionText.Trim(), -1);
+
+            if (int.TryParse(parts[^1], out var duration) && duration > 0)
+            {
+                var name = string.Join(' ', parts[..^1]).Trim();
+                return (name, duration);
+            }
+
+            return (rawConditionText.Trim(), -1);
+        }
+
+        private static (string DamageExpression, string DamageType) ParseAttackDamage(string[] parts, int startIndex)
+        {
+            if (parts == null || parts.Length <= startIndex)
+                return ("1d6+0", string.Empty);
+
+            var damageParts = parts[startIndex..];
+            if (damageParts.Length == 0)
+                return ("1d6+0", string.Empty);
+
+            var lastPart = damageParts[^1];
+            var isType = true;
+            foreach (var c in lastPart)
+            {
+                if (!char.IsLetter(c) && c != '_')
+                {
+                    isType = false;
+                    break;
+                }
+            }
+
+            if (isType && damageParts.Length > 1)
+            {
+                var expression = string.Join(' ', damageParts[..^1]);
+                return (expression, lastPart);
+            }
+
+            return (string.Join(' ', damageParts), string.Empty);
+        }
+        private void TickCurrentTokenConditions()
+        {
+            var current = _combatController.Current;
+            if (current == null)
+                return;
+
+            var expired = current.Sheet.TickConditionDurations();
+            if (expired.Count == 0)
+                return;
+
+            foreach (var condition in expired)
+            {
+                _chatController.SystemMessage($"{current.Name} não sofre mais de {condition}.");
+            }
+
+            if (_mapController.SelectedToken?.Id == current.Id)
+            {
+                UpdateSelectionPanel(current);
+                UpdateConditionList(current);
+            }
+        }
+
+        private void LoadSheetInputs(TokenData token)
+        {
+            foreach (var (nodeName, attributeName) in _attributeInputs)
+            {
+                GetNode<SpinBox>($"SidebarPanel/SidebarVBox/AttributeGrid/{nodeName}").Value = token.Sheet.GetAttributeValue(attributeName);
+            }
+
+            foreach (var (nodeName, skillName) in _skillInputs)
+            {
+                GetNode<SpinBox>($"SidebarPanel/SidebarVBox/SkillGrid/{nodeName}").Value = token.Sheet.GetSkillBonus(skillName);
+            }
+        }
+
+        private void StoreSheetInputs(TokenData token)
+        {
+            foreach (var (nodeName, attributeName) in _attributeInputs)
+            {
+                token.Sheet.Attributes[attributeName] = (int)GetNode<SpinBox>($"SidebarPanel/SidebarVBox/AttributeGrid/{nodeName}").Value;
+            }
+
+            foreach (var (nodeName, skillName) in _skillInputs)
+            {
+                token.Sheet.Skills[skillName] = (int)GetNode<SpinBox>($"SidebarPanel/SidebarVBox/SkillGrid/{nodeName}").Value;
+            }
         }
 
         private void OnRerollInitiative(string tokenId)
@@ -364,12 +741,16 @@ namespace TormentaVTT.UI
                 return;
             }
 
+            token.Sheet.CharacterClass = GetNode<LineEdit>("SidebarPanel/SidebarVBox/ClassInput").Text;
+            token.Sheet.Race = GetNode<LineEdit>("SidebarPanel/SidebarVBox/RaceInput").Text;
+            token.Sheet.Level = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/LevelInput").Value;
             token.Sheet.HP = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/StatsGrid/HPInput").Value;
             token.Sheet.PM = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/StatsGrid/PMInput").Value;
             token.Sheet.Defense = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/StatsGrid/DefenseInput").Value;
             token.Sheet.Initiative = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/StatsGrid/InitiativeInput").Value;
+            StoreSheetInputs(token);
             UpdateSelectionPanel(token);
-            _chatController.SystemMessage($"Estatísticas de {token.Name} atualizadas.");
+            _chatController.SystemMessage($"Ficha de {token.Name} atualizada.");
         }
 
         private void OnRemoveTokenPressed()
@@ -386,6 +767,63 @@ namespace TormentaVTT.UI
             UpdateAssetList();
             UpdateSelectionPanel(null);
             _chatController.SystemMessage($"Token '{token.Name}' removido.");
+        }
+
+        private void OnAddConditionPressed()
+        {
+            var token = _mapController.SelectedToken;
+            if (token == null)
+            {
+                _chatController.SystemMessage("Selecione um token para adicionar condição.");
+                return;
+            }
+
+            var conditionText = GetNode<LineEdit>("SidebarPanel/SidebarVBox/ConditionRow/ConditionInput").Text.Trim();
+            if (string.IsNullOrEmpty(conditionText))
+            {
+                _chatController.SystemMessage("Digite uma condição para adicionar.");
+                return;
+            }
+
+            var (conditionName, duration) = ParseConditionText(conditionText);
+            var alreadyPresent = token.Sheet.HasCondition(conditionName);
+            token.Sheet.AddCondition(conditionName, duration);
+
+            if (alreadyPresent)
+            {
+                _chatController.SystemMessage($"Condição '{conditionName}' atualizada em {token.Name}.");
+            }
+            else
+            {
+                var durationText = duration > 0 ? $" por {duration} turnos" : string.Empty;
+                _chatController.SystemMessage($"Condição '{conditionName}' adicionada a {token.Name}{durationText}.");
+            }
+
+            GetNode<LineEdit>("SidebarPanel/SidebarVBox/ConditionRow/ConditionInput").Text = string.Empty;
+            UpdateSelectionPanel(token);
+        }
+
+        private void OnRemoveConditionPressed()
+        {
+            var token = _mapController.SelectedToken;
+            if (token == null)
+            {
+                _chatController.SystemMessage("Selecione um token para remover condição.");
+                return;
+            }
+
+            var list = GetNode<ItemList>("SidebarPanel/SidebarVBox/ConditionsList");
+            var selected = list.GetSelectedItems();
+            if (selected.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma condição para remover.");
+                return;
+            }
+
+            var condition = list.GetItemText((int)selected[0]);
+            token.Sheet.RemoveCondition(condition);
+            _chatController.SystemMessage($"Condição '{condition}' removida de {token.Name}.");
+            UpdateSelectionPanel(token);
         }
 
         private void OnMapFileSelected(string path)
@@ -442,9 +880,23 @@ namespace TormentaVTT.UI
             }
         }
 
+        private void UpdateConditionList(TokenData? token)
+        {
+            var list = GetNode<ItemList>("SidebarPanel/SidebarVBox/ConditionsList");
+            list.Clear();
+            if (token == null)
+                return;
+
+            foreach (var condition in token.Sheet.Conditions)
+            {
+                list.AddItem(condition.ToString());
+            }
+        }
+
         private void OnSelectedTokenChanged(TokenData? token)
         {
             UpdateSelectionPanel(token);
+            UpdateConditionList(token);
 
             var assetList = GetNode<ItemList>("AssetsPanel/AssetsVBox/AssetList");
             // Clear custom colors and highlight the selected token in the asset list
@@ -528,6 +980,7 @@ namespace TormentaVTT.UI
             _mapController.LoadCampaign(campaign);
             GetNode<LineEdit>("Toolbar/TopButtons/CampaignName").Text = campaign.Name;
             UpdateAssetList();
+            UpdateConditionList(_mapController.SelectedToken);
             if (campaign.CombatActive)
             {
                 _combatController.LoadCombatState(
@@ -559,16 +1012,31 @@ namespace TormentaVTT.UI
             if (token == null)
             {
                 selectedName.Text = "Nenhum token selecionado";
+                GetNode<LineEdit>("SidebarPanel/SidebarVBox/ClassInput").Text = string.Empty;
+                GetNode<LineEdit>("SidebarPanel/SidebarVBox/RaceInput").Text = string.Empty;
+                GetNode<SpinBox>("SidebarPanel/SidebarVBox/LevelInput").Value = 1;
                 selectedStats.Text = "Selecione um token no mapa.";
                 hpInput.Value = 0;
                 pmInput.Value = 0;
                 defenseInput.Value = 0;
                 initiativeInput.Value = 0;
+                foreach (var (nodeName, _) in _attributeInputs)
+                {
+                    GetNode<SpinBox>($"SidebarPanel/SidebarVBox/AttributeGrid/{nodeName}").Value = 10;
+                }
+                foreach (var (nodeName, _) in _skillInputs)
+                {
+                    GetNode<SpinBox>($"SidebarPanel/SidebarVBox/SkillGrid/{nodeName}").Value = 0;
+                }
                 return;
             }
 
             selectedName.Text = token.Name;
-            selectedStats.Text = $"PV: {token.Sheet.HP} / PM: {token.Sheet.PM}\nDefesa: {token.Sheet.Defense} \nIniciativa: {token.Sheet.Initiative}\nCondições: {string.Join(", ", token.Sheet.Conditions)}";
+            GetNode<LineEdit>("SidebarPanel/SidebarVBox/ClassInput").Text = token.Sheet.CharacterClass;
+            GetNode<LineEdit>("SidebarPanel/SidebarVBox/RaceInput").Text = token.Sheet.Race;
+            GetNode<SpinBox>("SidebarPanel/SidebarVBox/LevelInput").Value = token.Sheet.Level;
+            LoadSheetInputs(token);
+            selectedStats.Text = $"Classe: {token.Sheet.CharacterClass} / Raça: {token.Sheet.Race} / Nível: {token.Sheet.Level}\nPV: {token.Sheet.HP} / PM: {token.Sheet.PM}\nDefesa: {token.Sheet.Defense} / Iniciativa: {token.Sheet.Initiative}\nAtributos: {string.Join(", ", _attributeInputs.Select(p => $"{p.AttributeName}:{token.Sheet.GetAttributeValue(p.AttributeName)}"))}\nPerícias: {string.Join(", ", _skillInputs.Select(p => $"{p.SkillName}:{token.Sheet.GetSkillBonus(p.SkillName)}"))}\nCondições: {token.Sheet.GetConditionSummary()}\nResistências: {token.Sheet.GetResistanceSummary()}\nVulnerabilidades: {token.Sheet.GetVulnerabilitySummary()}";
             hpInput.Value = token.Sheet.HP;
             pmInput.Value = token.Sheet.PM;
             defenseInput.Value = token.Sheet.Defense;

@@ -141,6 +141,27 @@ text = "Ficha Selecionada"
 [node name="SelectedName" type="Label" parent="SidebarPanel/SidebarVBox"]
 text = "Nenhum token selecionado"
 
+[node name="ClassLabel" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Classe"
+
+[node name="ClassInput" type="LineEdit" parent="SidebarPanel/SidebarVBox"]
+placeholder_text = "Classe"
+
+[node name="RaceLabel" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Raça"
+
+[node name="RaceInput" type="LineEdit" parent="SidebarPanel/SidebarVBox"]
+placeholder_text = "Raça"
+
+[node name="LevelLabel" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Nível"
+
+[node name="LevelInput" type="SpinBox" parent="SidebarPanel/SidebarVBox"]
+min_value = 1.0
+max_value = 20.0
+step = 1.0
+value = 1.0
+
 [node name="SelectedStats" type="Label" parent="SidebarPanel/SidebarVBox"]
 text = ""
 
@@ -180,8 +201,148 @@ min_value = -20.0
 max_value = 50.0
 step = 1.0
 
+[node name="AttributesTitle" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Atributos"
+
+[node name="AttributeGrid" type="GridContainer" parent="SidebarPanel/SidebarVBox"]
+columns = 2
+custom_constants/separation = 4
+
+[node name="ForcaLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Força"
+
+[node name="ForcaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="DestrezaLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Destreza"
+
+[node name="DestrezaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="ConstituicaoLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Constituição"
+
+[node name="ConstituicaoInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="InteligenciaLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Inteligência"
+
+[node name="InteligenciaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="SabedoriaLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Sabedoria"
+
+[node name="SabedoriaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="CarismaLabel" type="Label" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+text = "Carisma"
+
+[node name="CarismaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/AttributeGrid"]
+min_value = 1.0
+max_value = 30.0
+step = 1.0
+
+[node name="SkillsTitle" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Perícias"
+
+[node name="SkillGrid" type="GridContainer" parent="SidebarPanel/SidebarVBox"]
+columns = 2
+custom_constants/separation = 4
+
+[node name="AtletismoLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Atletismo"
+
+[node name="AtletismoInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="AcrobaciaLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Acrobacia"
+
+[node name="AcrobaciaInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="FurtividadeLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Furtividade"
+
+[node name="FurtividadeInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="PercepcaoLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Percepção"
+
+[node name="PercepcaoInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="IntimidacaoLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Intimidação"
+
+[node name="IntimidacaoInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="LidarComAnimaisLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Lidar com Animais"
+
+[node name="LidarComAnimaisInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
+[node name="PersuasaoLabel" type="Label" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+text = "Persuasão"
+
+[node name="PersuasaoInput" type="SpinBox" parent="SidebarPanel/SidebarVBox/SkillGrid"]
+min_value = 0.0
+max_value = 20.0
+step = 1.0
+
 [node name="ApplyStatsButton" type="Button" parent="SidebarPanel/SidebarVBox"]
 text = "Aplicar estatísticas"
+
+[node name="ConditionsTitle" type="Label" parent="SidebarPanel/SidebarVBox"]
+text = "Condições"
+
+[node name="ConditionRow" type="HBoxContainer" parent="SidebarPanel/SidebarVBox"]
+custom_constants/separation = 4
+
+[node name="ConditionInput" type="LineEdit" parent="SidebarPanel/SidebarVBox/ConditionRow"]
+placeholder_text = "Adicionar condição"
+
+[node name="AddConditionButton" type="Button" parent="SidebarPanel/SidebarVBox/ConditionRow"]
+text = "+"
+
+[node name="RemoveConditionButton" type="Button" parent="SidebarPanel/SidebarVBox/ConditionRow"]
+text = "-"
+
+[node name="ConditionsList" type="ItemList" parent="SidebarPanel/SidebarVBox"]
+size_flags_vertical = 3
+rect_min_size = Vector2(0, 100)
+select_mode = 1
+allow_rmb_select = false
+hide_folding = true
 
 [node name="RemoveTokenButton" type="Button" parent="SidebarPanel/SidebarVBox"]
 text = "Remover token"

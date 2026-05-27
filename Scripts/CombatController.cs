@@ -21,7 +21,7 @@ namespace TormentaVTT.UI
             var list = new List<(TokenData, int)>();
             foreach (var t in tokens)
             {
-                var baseInit = t.Sheet.Initiative;
+                var baseInit = t.Sheet.GetInitiativeBonus();
                 var roll = rollAll ? _rand.Next(1, 21) + baseInit : baseInit;
                 list.Add((t, roll));
             }
@@ -40,7 +40,7 @@ namespace TormentaVTT.UI
                 return;
 
             var entry = _order[idx];
-            var baseInit = entry.Token.Sheet.Initiative;
+            var baseInit = entry.Token.Sheet.GetInitiativeBonus();
             var newRoll = _rand.Next(1, 21) + baseInit;
             _order[idx] = (entry.Token, newRoll);
             // Re-sort
@@ -71,7 +71,7 @@ namespace TormentaVTT.UI
 
         public void AddTokenToOrder(TokenData token, bool rollInitiative = true)
         {
-            var baseInit = token.Sheet.Initiative;
+            var baseInit = token.Sheet.GetInitiativeBonus();
             var roll = rollInitiative ? _rand.Next(1, 21) + baseInit : baseInit;
             _order.Add((token, roll));
             _order = _order.OrderByDescending(x => x.InitiativeRoll).ThenBy(x => _rand.Next()).ToList();
@@ -122,7 +122,7 @@ namespace TormentaVTT.UI
                 if (token == null)
                     continue;
 
-                var roll = rolls.TryGetValue(id, out var savedRoll) ? savedRoll : token.Sheet.Initiative;
+                var roll = rolls.TryGetValue(id, out var savedRoll) ? savedRoll : token.Sheet.GetInitiativeBonus();
                 order.Add((token, roll));
             }
 

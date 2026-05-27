@@ -1,4 +1,5 @@
 using Godot;
+using System;
 using TormentaVTT.Models;
 using TormentaVTT.Services;
 
@@ -10,6 +11,8 @@ namespace TormentaVTT.UI
         private LineEdit _chatInput = null!;
         private Button _sendButton = null!;
         private DiceParser _diceParser = new();
+
+        public event Func<string, bool>? CommandTriggered;
 
         public override void _Ready()
         {
@@ -40,7 +43,7 @@ namespace TormentaVTT.UI
 
         private void HandleCommand(string text)
         {
-            if (text.StartsWith("/roll"))
+            if (text.StartsWith("/roll", StringComparison.OrdinalIgnoreCase))
             {
                 var expression = text.Substring(5).Trim();
                 if (string.IsNullOrEmpty(expression))
@@ -54,13 +57,18 @@ namespace TormentaVTT.UI
                 return;
             }
 
-            if (text.StartsWith("/init"))
+            if (CommandTriggered != null && CommandTriggered.Invoke(text))
+            {
+                return;
+            }
+
+            if (text.StartsWith("/init", StringComparison.OrdinalIgnoreCase))
             {
                 SystemMessage("Use o botão de iniciativa ou selecione um token primeiro.");
                 return;
             }
 
-            if (text.StartsWith("/heal"))
+            if (text.StartsWith("/heal", StringComparison.OrdinalIgnoreCase))
             {
                 SystemMessage("Macro /heal ainda será expandida.");
                 return;
