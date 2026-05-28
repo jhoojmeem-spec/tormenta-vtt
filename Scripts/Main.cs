@@ -109,6 +109,7 @@ namespace TormentaVTT.UI
 
             LoadCampaign(_currentCampaign);
             UpdateAssetList();
+            CreatePercentUi();
         }
 
         private void OnNewCampaignPressed()
@@ -204,6 +205,109 @@ namespace TormentaVTT.UI
                 return true;
             }
 
+            if (parts[0].Equals("/help", StringComparison.OrdinalIgnoreCase))
+            {
+                _chatController.SystemMessage("Comandos disponíveis: /attack [alvo] [dano tipo], /damage [alvo] <expressão> [tipo], /damageaoe <raio> <expressão> [tipo], /sheet [token], /tokens, /select <token>, /target <token>, /rename [token] <novo_nome>, /delete [token], /startcombat, /endcombat, /order, /next, /prev, /resist [token] add|remove|list, /vuln [token] add|remove|list, /resistpct [token] add|remove|list, /vulnpct [token] add|remove|list, /condition [token] add|remove|list, /heal [token] <expr>, /init [all], /skill <nome>, /test <atributo>");
+                return true;
+            }
+
+            if (parts[0].Equals("/tokens", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_currentCampaign.Tokens.Count == 0)
+                {
+                    _chatController.SystemMessage("Nenhum token presente.");
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Tokens: {string.Join(", ", _currentCampaign.Tokens.Select(t => t.Name))}");
+                }
+                return true;
+            }
+
+            if (parts[0].Equals("/select", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/target", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parts.Length < 2)
+                {
+                    _chatController.SystemMessage("Uso: /select <nome do token> ou /target <nome do token>");
+                    return true;
+                }
+
+                var idx = 1;
+                var tokenName = ExtractTokenName(parts, ref idx);
+                if (string.IsNullOrWhiteSpace(tokenName))
+                {
+                    _chatController.SystemMessage("Nome de token inválido ou não encontrado.");
+                    return true;
+                }
+
+                var token = FindTokenByName(tokenName);
+                if (token == null)
+                {
+                    _chatController.SystemMessage($"Token '{tokenName}' não encontrado.");
+                    return true;
+                }
+
+                _mapController.SelectToken(token);
+                UpdateSelectionPanel(token);
+                _chatController.SystemMessage($"Token '{token.Name}' selecionado.");
+                return true;
+            }
+
+            if (parts[0].Equals("/sheet", StringComparison.OrdinalIgnoreCase))
+            {
+                var idx = 1;
+                var token = ResolveTargetToken(parts, ref idx);
+                if (token == null)
+                {
+                    _chatController.SystemMessage("Nenhum token selecionado ou encontrado para mostrar ficha.");
+                    return true;
+                }
+
+                var details = $"Ficha de {token.Name} / Classe: {token.Sheet.CharacterClass} / Raça: {token.Sheet.Race} / Nível: {token.Sheet.Level}\nPV: {token.Sheet.HP} / PM: {token.Sheet.PM} / Defesa: {token.Sheet.Defense} / Iniciativa: {token.Sheet.Initiative}\nAtributos: {string.Join(", ", _attributeInputs.Select(p => $"{p.AttributeName}:{token.Sheet.GetAttributeValue(p.AttributeName)}"))}\nPerícias: {string.Join(", ", _skillInputs.Select(p => $"{p.SkillName}:{token.Sheet.GetSkillBonus(p.SkillName)}"))}\nCondições: {token.Sheet.GetConditionSummary()}\nResistências: {token.Sheet.GetResistanceSummary()}\nResistências%: {token.Sheet.GetResistancePercentSummary()}\nVulnerabilidades: {token.Sheet.GetVulnerabilitySummary()}\nVulnerabilidades%: {token.Sheet.GetVulnerabilityPercentSummary()}";
+                _chatController.SystemMessage(details);
+                return true;
+            }
+
+            if (parts[0].Equals("/rename", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var idx = 1;
+                var token = ResolveTargetToken(parts, ref idx);
+                if (token == null)
+                {
+                    _chatController.SystemMessage("Nenhum token selecionado ou encontrado para renomear.");
+                    return true;
+                }
+
+                if (idx >= parts.Length)
+                {
+                    _chatController.SystemMessage("Uso: /rename [token] <novo_nome>");
+                    return true;
+                }
+
+                var newName = string.Join(' ', parts[idx..]);
+                var oldName = token.Name;
+                token.Name = newName;
+                UpdateAssetList();
+                UpdateSelectionPanel(token);
+                _chatController.SystemMessage($"Token '{oldName}' renomeado para '{newName}'.");
+                return true;
+            }
+
+            if (parts[0].Equals("/delete", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var idx = 1;
+                var token = ResolveTargetToken(parts, ref idx);
+                if (token == null)
+                {
+                    _chatController.SystemMessage("Nenhum token selecionado ou encontrado para excluir.");
+                    return true;
+                }
+
+                DeleteToken(token);
+                _chatController.SystemMessage($"Token '{token.Name}' excluído.");
+                return true;
+            }
+
             if (parts[0].Equals("/init", StringComparison.OrdinalIgnoreCase))
             {
                 if (parts.Length > 1 && parts[1].Equals("all", StringComparison.OrdinalIgnoreCase))
@@ -228,36 +332,130 @@ namespace TormentaVTT.UI
                 return true;
             }
 
+            if (parts[0].Equals("/startcombat", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/begincombat", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_combatController.InCombat)
+                {
+                    _chatController.SystemMessage("O combate já está em andamento.");
+                    return true;
+                }
+
+                _combatController.StartCombat(_currentCampaign.Tokens, true);
+                var order = _combatController.GetOrder();
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("Ordem de iniciativa:");
+                foreach (var entry in order)
+                {
+                    sb.AppendLine($"{entry.Token.Name}: {entry.InitiativeRoll}");
+                }
+                _chatController.AddSystemMessage(sb.ToString());
+                UpdateInitiativePanel();
+                return true;
+            }
+
+            if (parts[0].Equals("/endcombat", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/stopcombat", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_combatController.InCombat)
+                {
+                    _chatController.SystemMessage("Não há combate em andamento.");
+                    return true;
+                }
+
+                _combatController.EndCombat();
+                UpdateInitiativePanel();
+                _chatController.SystemMessage("Combate encerrado.");
+                return true;
+            }
+
+            if (parts[0].Equals("/order", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/initiativeorder", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_combatController.InCombat)
+                {
+                    _chatController.SystemMessage("Nenhum combate ativo.");
+                    return true;
+                }
+
+                var order = _combatController.GetOrder();
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("Ordem de iniciativa:");
+                for (var i = 0; i < order.Count; i++)
+                {
+                    var entry = order[i];
+                    var currentMarker = _combatController.Current != null && _combatController.Current.Id == entry.Token.Id ? " <== vez atual" : string.Empty;
+                    sb.AppendLine($"{i + 1}. {entry.Token.Name} ({entry.InitiativeRoll}){currentMarker}");
+                }
+                _chatController.AddSystemMessage(sb.ToString());
+                return true;
+            }
+
+            if (parts[0].Equals("/next", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/pass", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_combatController.InCombat)
+                {
+                    _chatController.SystemMessage("Nenhum combate ativo.");
+                    return true;
+                }
+
+                TickCurrentTokenConditions();
+                _combatController.AdvanceTurn();
+                UpdateInitiativePanel();
+                _chatController.SystemMessage($"Vez de: {_combatController.Current?.Name ?? "Nenhum"}");
+                return true;
+            }
+
+            if (parts[0].Equals("/prev", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/back", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!_combatController.InCombat)
+                {
+                    _chatController.SystemMessage("Nenhum combate ativo.");
+                    return true;
+                }
+
+                TickCurrentTokenConditions();
+                _combatController.RetreatTurn();
+                UpdateInitiativePanel();
+                _chatController.SystemMessage($"Vez de: {_combatController.Current?.Name ?? "Nenhum"}");
+                return true;
+            }
+
             if (parts[0].Equals("/heal", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
             {
-                var selected = _mapController.SelectedToken;
-                if (selected == null)
+                var startIdx = 1;
+                var target = ResolveTargetToken(parts, ref startIdx);
+                if (target == null)
                 {
                     _chatController.SystemMessage("Selecione um token para curar.");
                     return true;
                 }
 
-                var expression = string.Join(' ', parts[1..]);
+                var expression = string.Join(' ', parts[startIdx..]);
                 var healResult = _diceParser.Evaluate(expression);
-                selected.Sheet.HP += healResult.Total;
-                _chatController.AddSystemMessage($"{selected.Name} recupera {healResult.Total} PV ({healResult.Breakdown}). PV atuais: {selected.Sheet.HP}.");
-                UpdateSelectionPanel(selected);
+                target.Sheet.HP += healResult.Total;
+                _chatController.AddSystemMessage($"{target.Name} recupera {healResult.Total} PV ({healResult.Breakdown}). PV atuais: {target.Sheet.HP}.");
+                UpdateSelectionPanel(target);
                 return true;
             }
 
             if (parts[0].Equals("/condition", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
             {
-                var selected = _mapController.SelectedToken;
+                var idx = 1;
+                var selected = ResolveTargetToken(parts, ref idx);
                 if (selected == null)
                 {
                     _chatController.SystemMessage("Selecione um token para gerenciar condições.");
                     return true;
                 }
 
-                var action = parts[1].ToLowerInvariant();
-                    if (action == "add" && parts.Length > 2)
+                if (idx >= parts.Length)
                 {
-                    var rawConditionText = string.Join(' ', parts[2..]);
+                    _chatController.SystemMessage("Uso: /condition [token] add <nome> [turnos] | /condition [token] remove <nome> | /condition [token] list");
+                    return true;
+                }
+
+                var action = parts[idx].ToLowerInvariant();
+                if (action == "add" && parts.Length > idx + 1)
+                {
+                    var rawConditionText = string.Join(' ', parts[(idx + 1)..]);
                     var (conditionName, duration) = ParseConditionText(rawConditionText);
                     var alreadyPresent = selected.Sheet.HasCondition(conditionName);
                     selected.Sheet.AddCondition(conditionName, duration);
@@ -276,9 +474,9 @@ namespace TormentaVTT.UI
                     return true;
                 }
 
-                if (action == "remove" && parts.Length > 2)
+                if (action == "remove" && parts.Length > idx + 1)
                 {
-                    var conditionName = string.Join(' ', parts[2..]);
+                    var conditionName = string.Join(' ', parts[(idx + 1)..]);
                     selected.Sheet.RemoveCondition(conditionName);
                     _chatController.SystemMessage($"Condição '{conditionName}' removida de {selected.Name}.");
                     UpdateSelectionPanel(selected);
@@ -291,32 +489,39 @@ namespace TormentaVTT.UI
                     return true;
                 }
 
-                _chatController.SystemMessage("Uso: /condition add <nome> [turnos] | /condition remove <nome> | /condition list");
+                _chatController.SystemMessage("Uso: /condition [token] add <nome> [turnos] | /condition [token] remove <nome> | /condition [token] list");
                 return true;
             }
 
             if (parts[0].Equals("/resist", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
             {
-                var selected = _mapController.SelectedToken;
+                var idx = 1;
+                var selected = ResolveTargetToken(parts, ref idx);
                 if (selected == null)
                 {
                     _chatController.SystemMessage("Selecione um token para gerenciar resistências.");
                     return true;
                 }
 
-                var subAction = parts[1].ToLowerInvariant();
-                if (subAction == "add" && parts.Length > 3 && int.TryParse(parts[3], out var amount))
+                if (idx >= parts.Length)
                 {
-                    var damageType = parts[2];
+                    _chatController.SystemMessage("Uso: /resist [token] add <tipo> <valor> | /resist [token] remove <tipo> | /resist [token] list");
+                    return true;
+                }
+
+                var subAction = parts[idx].ToLowerInvariant();
+                if (subAction == "add" && parts.Length > idx + 2 && int.TryParse(parts[idx + 2], out var amount))
+                {
+                    var damageType = parts[idx + 1];
                     selected.Sheet.SetResistance(damageType, amount);
                     _chatController.SystemMessage($"Resistência {damageType}:{amount} adicionada a {selected.Name}.");
                     UpdateSelectionPanel(selected);
                     return true;
                 }
 
-                if (subAction == "remove" && parts.Length > 2)
+                if (subAction == "remove" && parts.Length > idx + 1)
                 {
-                    var damageType = parts[2];
+                    var damageType = parts[idx + 1];
                     selected.Sheet.SetResistance(damageType, 0);
                     _chatController.SystemMessage($"Resistência {damageType} removida de {selected.Name}.");
                     UpdateSelectionPanel(selected);
@@ -329,7 +534,97 @@ namespace TormentaVTT.UI
                     return true;
                 }
 
-                _chatController.SystemMessage("Uso: /resist add <tipo> <valor> | /resist remove <tipo> | /resist list");
+                _chatController.SystemMessage("Uso: /resist [token] add <tipo> <valor> | /resist [token] remove <tipo> | /resist [token] list");
+                return true;
+            }
+
+            if (parts[0].Equals("/resistpct", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var idx = 1;
+                var selected = ResolveTargetToken(parts, ref idx);
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para gerenciar resistências percentuais.");
+                    return true;
+                }
+
+                if (idx >= parts.Length)
+                {
+                    _chatController.SystemMessage("Uso: /resistpct [token] add <tipo> <percent> | /resistpct [token] remove <tipo> | /resistpct [token] list");
+                    return true;
+                }
+
+                var subAction = parts[idx].ToLowerInvariant();
+                if (subAction == "add" && parts.Length > idx + 2 && int.TryParse(parts[idx + 2], out var pct))
+                {
+                    var damageType = parts[idx + 1];
+                    selected.Sheet.SetResistancePercent(damageType, pct);
+                    _chatController.SystemMessage($"Resistência% {damageType}:{pct}% adicionada a {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "remove" && parts.Length > idx + 1)
+                {
+                    var damageType = parts[idx + 1];
+                    selected.Sheet.SetResistancePercent(damageType, 0);
+                    _chatController.SystemMessage($"Resistência% {damageType} removida de {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "list")
+                {
+                    _chatController.SystemMessage($"Resistências% de {selected.Name}: {selected.Sheet.GetResistancePercentSummary()}");
+                    return true;
+                }
+
+                _chatController.SystemMessage("Uso: /resistpct [token] add <tipo> <percent> | /resistpct [token] remove <tipo> | /resistpct [token] list");
+                return true;
+            }
+
+            if (parts[0].Equals("/vulnpct", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var idx = 1;
+                var selected = ResolveTargetToken(parts, ref idx);
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para gerenciar vulnerabilidades percentuais.");
+                    return true;
+                }
+
+                if (idx >= parts.Length)
+                {
+                    _chatController.SystemMessage("Uso: /vulnpct [token] add <tipo> <percent> | /vulnpct [token] remove <tipo> | /vulnpct [token] list");
+                    return true;
+                }
+
+                var subAction = parts[idx].ToLowerInvariant();
+                if (subAction == "add" && parts.Length > idx + 2 && int.TryParse(parts[idx + 2], out var pct))
+                {
+                    var damageType = parts[idx + 1];
+                    selected.Sheet.SetVulnerabilityPercent(damageType, pct);
+                    _chatController.SystemMessage($"Vulnerabilidade% {damageType}:{pct}% adicionada a {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "remove" && parts.Length > idx + 1)
+                {
+                    var damageType = parts[idx + 1];
+                    selected.Sheet.SetVulnerabilityPercent(damageType, 0);
+                    _chatController.SystemMessage($"Vulnerabilidade% {damageType} removida de {selected.Name}.");
+                    UpdateSelectionPanel(selected);
+                    return true;
+                }
+
+                if (subAction == "list")
+                {
+                    _chatController.SystemMessage($"Vulnerabilidades% de {selected.Name}: {selected.Sheet.GetVulnerabilityPercentSummary()}");
+                    return true;
+                }
+
+                _chatController.SystemMessage("Uso: /vulnpct [token] add <tipo> <percent> | /vulnpct [token] remove <tipo> | /vulnpct [token] list");
                 return true;
             }
 
@@ -368,6 +663,79 @@ namespace TormentaVTT.UI
                 }
 
                 _chatController.SystemMessage("Uso: /vuln add <tipo> <valor> | /vuln remove <tipo> | /vuln list");
+                return true;
+            }
+
+            if (parts[0].Equals("/damage", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                // /damage [targetName] <expression> [type]
+                var attacker = _combatController.Current ?? _mapController.SelectedToken;
+                TokenData? target = null;
+                var startIdx = 1;
+
+                // If first arg matches a token name, treat as explicit target
+                var maybeTarget = _currentCampaign.Tokens.Find(t => t.Name.Equals(parts[1], StringComparison.OrdinalIgnoreCase));
+                if (maybeTarget != null)
+                {
+                    target = maybeTarget;
+                    startIdx = 2;
+                }
+
+                if (target == null)
+                {
+                    target = _mapController.SelectedToken != attacker ? _mapController.SelectedToken : _currentCampaign.Tokens.Find(t => t.Id != attacker?.Id);
+                }
+
+                if (target == null)
+                {
+                    _chatController.SystemMessage("Nenhum alvo disponível para aplicar dano.");
+                    return true;
+                }
+
+                var (expr, dtype) = ParseAttackDamage(parts, startIdx);
+                var dmgRoll = _diceParser.Evaluate(expr);
+                var adjusted = target.Sheet.GetDamageAfterTypeModifiers(dmgRoll.Total, dtype);
+
+                OnApplyDamage(target.Id, adjusted);
+                var typeText = string.IsNullOrEmpty(dtype) ? string.Empty : $" de {dtype}";
+                _chatController.AddSystemMessage($"{target.Name} sofre {adjusted} dano ({dmgRoll.Total} base{typeText}). PV atuais: {Math.Max(0, target.Sheet.HP)}.");
+                UpdateSelectionPanel(_mapController.SelectedToken);
+                return true;
+            }
+
+            if (parts[0].Equals("/damageaoe", StringComparison.OrdinalIgnoreCase) && parts.Length > 2)
+            {
+                // /damageaoe <radius> <expression> [type]
+                var centerToken = _mapController.SelectedToken;
+                if (centerToken == null)
+                {
+                    _chatController.SystemMessage("Selecione um token como centro da área.");
+                    return true;
+                }
+
+                if (!int.TryParse(parts[1], out var radius))
+                {
+                    _chatController.SystemMessage("Uso: /damageaoe <radius> <expression> [type] (radius em pixels)");
+                    return true;
+                }
+
+                var (expr, dtype) = ParseAttackDamage(parts, 2);
+                var roll = _diceParser.Evaluate(expr);
+                var affected = _currentCampaign.Tokens.Where(t => t.Position.DistanceTo(centerToken.Position) <= radius).ToList();
+                if (affected.Count == 0)
+                {
+                    _chatController.SystemMessage("Nenhum token na área.");
+                    return true;
+                }
+
+                foreach (var tgt in affected)
+                {
+                    var adjusted = tgt.Sheet.GetDamageAfterTypeModifiers(roll.Total, dtype);
+                    OnApplyDamage(tgt.Id, adjusted);
+                    _chatController.AddSystemMessage($"{tgt.Name} sofre {adjusted} dano ({roll.Total} base{(string.IsNullOrEmpty(dtype) ? string.Empty : $" de {dtype}")}). PV atuais: {Math.Max(0, tgt.Sheet.HP)}.");
+                }
+
+                UpdateSelectionPanel(_mapController.SelectedToken);
                 return true;
             }
 
@@ -411,15 +779,16 @@ namespace TormentaVTT.UI
                     return true;
                 }
 
-                var (resolvedExpression, resolvedType) = ParseAttackDamage(parts, target != null ? 2 : 1);
-                var result = _ruleEngine.RollAttack(attacker, target, resolvedExpression, resolvedType);
+                var (resolvedExpression, resolvedType) = ParseAttackDamage(parts, 2);
+                var targetNonNull = target!;
+                var result = _ruleEngine.RollAttack(attacker, targetNonNull, resolvedExpression, resolvedType);
                 var hitText = result.Hit ? "acerta" : "erra";
                 var specialText = result.IsCritical ? " CRÍTICO!" : result.IsFumble ? " FUMBLE!" : string.Empty;
                 var typeText = string.IsNullOrEmpty(resolvedType) ? string.Empty : $" de {resolvedType}";
-                _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name}{typeText} e {hitText} com {result.RollResult.Total} [{result.RollResult.Breakdown}] contra Defesa {target.Sheet.GetEffectiveDefense()}.{specialText}");
+                _chatController.AddSystemMessage($"{attacker.Name} ataca {targetNonNull.Name}{typeText} e {hitText} com {result.RollResult.Total} [{result.RollResult.Breakdown}] contra Defesa {targetNonNull.Sheet.GetEffectiveDefense()}.{specialText}");
                 if (result.Hit)
                 {
-                    OnApplyDamage(target.Id, result.Damage);
+                    OnApplyDamage(targetNonNull.Id, result.Damage);
                 }
 
                 return true;
@@ -566,7 +935,7 @@ namespace TormentaVTT.UI
                 return;
 
             var amount = Math.Max(1, (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions/DamageInput").Value);
-            var result = _ruleEngine.RollAttack(attacker, target, amount);
+            var result = _ruleEngine.RollAttack(attacker, target!, amount);
             var hitText = result.Hit ? "acerta" : "erra";
             var specialText = result.IsCritical ? " CRÍTICO!" : result.IsFumble ? " FUMBLE!" : string.Empty;
             _chatController.AddSystemMessage($"{attacker.Name} ataca {target.Name} e {hitText} com {result.RollResult.Total} [{result.RollResult.Breakdown}] contra Defesa {target.Sheet.GetEffectiveDefense()}.{specialText}");
@@ -622,6 +991,77 @@ namespace TormentaVTT.UI
             }
 
             return (rawConditionText.Trim(), -1);
+        }
+
+        private TokenData? ResolveTargetToken(string[] parts, ref int index)
+        {
+            var originalIndex = index;
+            var tokenName = ExtractTokenName(parts, ref index);
+            if (!string.IsNullOrWhiteSpace(tokenName))
+            {
+                var maybeTarget = FindTokenByName(tokenName);
+                if (maybeTarget != null)
+                    return maybeTarget;
+
+                index = originalIndex;
+            }
+
+            return _mapController.SelectedToken;
+        }
+
+        private string ExtractTokenName(string[] parts, ref int index)
+        {
+            if (index >= parts.Length)
+                return string.Empty;
+
+            if (parts[index].StartsWith('"'))
+            {
+                var collected = new List<string> { parts[index] };
+                var endIndex = index;
+                if (parts[index].EndsWith('"') && parts[index].Length > 1)
+                {
+                    index++;
+                    return parts[index - 1].Trim('"');
+                }
+
+                for (var i = index + 1; i < parts.Length; i++)
+                {
+                    collected.Add(parts[i]);
+                    if (parts[i].EndsWith('"'))
+                    {
+                        endIndex = i;
+                        break;
+                    }
+                }
+
+                if (endIndex > index)
+                {
+                    var joined = string.Join(' ', collected).Trim();
+                    joined = joined.Trim('"');
+                    index = endIndex + 1;
+                    return joined;
+                }
+            }
+
+            for (var length = parts.Length - index; length > 0; length--)
+            {
+                var candidate = string.Join(' ', parts[index..(index + length)]);
+                if (FindTokenByName(candidate) != null)
+                {
+                    index += length;
+                    return candidate;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private TokenData? FindTokenByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            return _currentCampaign.Tokens.Find(t => t.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         private static (string DamageExpression, string DamageType) ParseAttackDamage(string[] parts, int startIndex)
@@ -762,11 +1202,16 @@ namespace TormentaVTT.UI
                 return;
             }
 
+            DeleteToken(token);
+            _chatController.SystemMessage($"Token '{token.Name}' removido.");
+        }
+
+        private void DeleteToken(TokenData token)
+        {
             _currentCampaign.Tokens.Remove(token);
             _mapController.RemoveToken(token);
             UpdateAssetList();
             UpdateSelectionPanel(null);
-            _chatController.SystemMessage($"Token '{token.Name}' removido.");
         }
 
         private void OnAddConditionPressed()
@@ -1000,6 +1445,127 @@ namespace TormentaVTT.UI
             UpdateSelectionPanel(_mapController.SelectedToken);
         }
 
+        private void CreatePercentUi()
+        {
+            var sidebar = GetNode<VBoxContainer>("SidebarPanel/SidebarVBox");
+
+            var resPctLabel = new Label { Text = "Resistências (%)" };
+            sidebar.AddChild(resPctLabel);
+
+            var resPctHBox = new HBoxContainer();
+            var resPctType = new LineEdit { Name = "ResPctTypeInput", PlaceholderText = "tipo" };
+            var resPctAmount = new SpinBox { Name = "ResPctAmountInput", MinValue = 0, MaxValue = 100, Value = 0 };
+            var resPctAdd = new Button { Text = "Add%" };
+            var resPctRemove = new Button { Text = "Remove%" };
+            var resPctList = new Button { Text = "List%" };
+            resPctHBox.AddChild(resPctType);
+            resPctHBox.AddChild(resPctAmount);
+            resPctHBox.AddChild(resPctAdd);
+            resPctHBox.AddChild(resPctRemove);
+            resPctHBox.AddChild(resPctList);
+            sidebar.AddChild(resPctHBox);
+
+            resPctAdd.Pressed += () => {
+                OnUiAddResistancePercent(resPctType.Text, (int)resPctAmount.Value);
+            };
+            resPctRemove.Pressed += () => { OnUiRemoveResistancePercent(resPctType.Text); };
+            resPctList.Pressed += () => { OnUiListResistancePercent(); };
+
+            var vulnPctLabel = new Label { Text = "Vulnerabilidades (%)" };
+            sidebar.AddChild(vulnPctLabel);
+
+            var vulnPctHBox = new HBoxContainer();
+            var vulnPctType = new LineEdit { Name = "VulnPctTypeInput", PlaceholderText = "tipo" };
+            var vulnPctAmount = new SpinBox { Name = "VulnPctAmountInput", MinValue = 0, MaxValue = 100, Value = 0 };
+            var vulnPctAdd = new Button { Text = "Add%" };
+            var vulnPctRemove = new Button { Text = "Remove%" };
+            var vulnPctList = new Button { Text = "List%" };
+            vulnPctHBox.AddChild(vulnPctType);
+            vulnPctHBox.AddChild(vulnPctAmount);
+            vulnPctHBox.AddChild(vulnPctAdd);
+            vulnPctHBox.AddChild(vulnPctRemove);
+            vulnPctHBox.AddChild(vulnPctList);
+            sidebar.AddChild(vulnPctHBox);
+
+            vulnPctAdd.Pressed += () => { OnUiAddVulnerabilityPercent(vulnPctType.Text, (int)vulnPctAmount.Value); };
+            vulnPctRemove.Pressed += () => { OnUiRemoveVulnerabilityPercent(vulnPctType.Text); };
+            vulnPctList.Pressed += () => { OnUiListVulnerabilityPercent(); };
+        }
+
+        private void OnUiAddResistancePercent(string type, int percent)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para adicionar resistência percentual.");
+                return;
+            }
+            selected.Sheet.SetResistancePercent(type, percent);
+            _chatController.SystemMessage($"Resistência% {type}:{percent}% adicionada a {selected.Name}.");
+            UpdateSelectionPanel(selected);
+        }
+
+        private void OnUiRemoveResistancePercent(string type)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para remover resistência percentual.");
+                return;
+            }
+            selected.Sheet.SetResistancePercent(type, 0);
+            _chatController.SystemMessage($"Resistência% {type} removida de {selected.Name}.");
+            UpdateSelectionPanel(selected);
+        }
+
+        private void OnUiListResistancePercent()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para listar resistências percentuais.");
+                return;
+            }
+            _chatController.SystemMessage($"Resistências% de {selected.Name}: {selected.Sheet.GetResistancePercentSummary()}");
+        }
+
+        private void OnUiAddVulnerabilityPercent(string type, int percent)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para adicionar vulnerabilidade percentual.");
+                return;
+            }
+            selected.Sheet.SetVulnerabilityPercent(type, percent);
+            _chatController.SystemMessage($"Vulnerabilidade% {type}:{percent}% adicionada a {selected.Name}.");
+            UpdateSelectionPanel(selected);
+        }
+
+        private void OnUiRemoveVulnerabilityPercent(string type)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para remover vulnerabilidade percentual.");
+                return;
+            }
+            selected.Sheet.SetVulnerabilityPercent(type, 0);
+            _chatController.SystemMessage($"Vulnerabilidade% {type} removida de {selected.Name}.");
+            UpdateSelectionPanel(selected);
+        }
+
+        private void OnUiListVulnerabilityPercent()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para listar vulnerabilidades percentuais.");
+                return;
+            }
+            _chatController.SystemMessage($"Vulnerabilidades% de {selected.Name}: {selected.Sheet.GetVulnerabilityPercentSummary()}");
+        }
+
         private void UpdateSelectionPanel(TokenData? token)
         {
             var selectedName = GetNode<Label>("SidebarPanel/SidebarVBox/SelectedName");
@@ -1036,7 +1602,7 @@ namespace TormentaVTT.UI
             GetNode<LineEdit>("SidebarPanel/SidebarVBox/RaceInput").Text = token.Sheet.Race;
             GetNode<SpinBox>("SidebarPanel/SidebarVBox/LevelInput").Value = token.Sheet.Level;
             LoadSheetInputs(token);
-            selectedStats.Text = $"Classe: {token.Sheet.CharacterClass} / Raça: {token.Sheet.Race} / Nível: {token.Sheet.Level}\nPV: {token.Sheet.HP} / PM: {token.Sheet.PM}\nDefesa: {token.Sheet.Defense} / Iniciativa: {token.Sheet.Initiative}\nAtributos: {string.Join(", ", _attributeInputs.Select(p => $"{p.AttributeName}:{token.Sheet.GetAttributeValue(p.AttributeName)}"))}\nPerícias: {string.Join(", ", _skillInputs.Select(p => $"{p.SkillName}:{token.Sheet.GetSkillBonus(p.SkillName)}"))}\nCondições: {token.Sheet.GetConditionSummary()}\nResistências: {token.Sheet.GetResistanceSummary()}\nVulnerabilidades: {token.Sheet.GetVulnerabilitySummary()}";
+            selectedStats.Text = $"Classe: {token.Sheet.CharacterClass} / Raça: {token.Sheet.Race} / Nível: {token.Sheet.Level}\nPV: {token.Sheet.HP} / PM: {token.Sheet.PM}\nDefesa: {token.Sheet.Defense} / Iniciativa: {token.Sheet.Initiative}\nAtributos: {string.Join(", ", _attributeInputs.Select(p => $"{p.AttributeName}:{token.Sheet.GetAttributeValue(p.AttributeName)}"))}\nPerícias: {string.Join(", ", _skillInputs.Select(p => $"{p.SkillName}:{token.Sheet.GetSkillBonus(p.SkillName)}"))}\nCondições: {token.Sheet.GetConditionSummary()}\nResistências: {token.Sheet.GetResistanceSummary()}\nResistências%: {token.Sheet.GetResistancePercentSummary()}\nVulnerabilidades: {token.Sheet.GetVulnerabilitySummary()}\nVulnerabilidades%: {token.Sheet.GetVulnerabilityPercentSummary()}";
             hpInput.Value = token.Sheet.HP;
             pmInput.Value = token.Sheet.PM;
             defenseInput.Value = token.Sheet.Defense;

@@ -38,6 +38,8 @@ namespace TormentaVTT.Models
         public List<ConditionEntry> Conditions { get; set; } = new();
         public Godot.Collections.Dictionary<string, int> Resistances { get; set; } = new();
         public Godot.Collections.Dictionary<string, int> Vulnerabilities { get; set; } = new();
+        public Godot.Collections.Dictionary<string, int> ResistancesPercent { get; set; } = new();
+        public Godot.Collections.Dictionary<string, int> VulnerabilitiesPercent { get; set; } = new();
 
         public sealed class ConditionEntry
         {
@@ -89,6 +91,30 @@ namespace TormentaVTT.Models
                 conditionsArray.Add(condition.ToDictionary());
             }
 
+            var resistancesDictOut = new Godot.Collections.Dictionary<string, int>();
+            foreach (var r in Resistances)
+            {
+                resistancesDictOut[r.Key] = r.Value;
+            }
+
+            var vulnerabilitiesDictOut = new Godot.Collections.Dictionary<string, int>();
+            foreach (var v in Vulnerabilities)
+            {
+                vulnerabilitiesDictOut[v.Key] = v.Value;
+            }
+
+            var resistancesPctOut = new Godot.Collections.Dictionary<string, int>();
+            foreach (var r in ResistancesPercent)
+            {
+                resistancesPctOut[r.Key] = r.Value;
+            }
+
+            var vulnerabilitiesPctOut = new Godot.Collections.Dictionary<string, int>();
+            foreach (var v in VulnerabilitiesPercent)
+            {
+                vulnerabilitiesPctOut[v.Key] = v.Value;
+            }
+
             return new Godot.Collections.Dictionary
             {
                 ["name"] = Name,
@@ -101,7 +127,11 @@ namespace TormentaVTT.Models
                 ["initiative"] = Initiative,
                 ["attributes"] = attributes,
                 ["skills"] = skills,
-                ["conditions"] = conditionsArray
+                ["conditions"] = conditionsArray,
+                ["resistances"] = resistancesDictOut,
+                ["vulnerabilities"] = vulnerabilitiesDictOut,
+                ["resistances_percent"] = resistancesPctOut,
+                ["vulnerabilities_percent"] = vulnerabilitiesPctOut
             };
         }
 
@@ -177,6 +207,16 @@ namespace TormentaVTT.Models
                 }
             }
 
+            if (data.TryGetValue("resistances_percent", out var resistancesPercentRaw))
+            {
+                sheet.ResistancesPercent = new Godot.Collections.Dictionary<string, int>();
+                var resistancesPctDict = resistancesPercentRaw.AsGodotDictionary();
+                foreach (var entry in resistancesPctDict)
+                {
+                    sheet.ResistancesPercent[entry.Key.ToString().ToLowerInvariant()] = entry.Value.AsInt32();
+                }
+            }
+
             if (data.TryGetValue("vulnerabilities", out var vulnerabilitiesRaw))
             {
                 sheet.Vulnerabilities = new Godot.Collections.Dictionary<string, int>();
@@ -184,6 +224,16 @@ namespace TormentaVTT.Models
                 foreach (var entry in vulnerabilitiesDict)
                 {
                     sheet.Vulnerabilities[entry.Key.ToString().ToLowerInvariant()] = entry.Value.AsInt32();
+                }
+            }
+
+            if (data.TryGetValue("vulnerabilities_percent", out var vulnerabilitiesPercentRaw))
+            {
+                sheet.VulnerabilitiesPercent = new Godot.Collections.Dictionary<string, int>();
+                var vulnerabilitiesPctDict = vulnerabilitiesPercentRaw.AsGodotDictionary();
+                foreach (var entry in vulnerabilitiesPctDict)
+                {
+                    sheet.VulnerabilitiesPercent[entry.Key.ToString().ToLowerInvariant()] = entry.Value.AsInt32();
                 }
             }
 
@@ -299,8 +349,56 @@ namespace TormentaVTT.Models
             var normalizedType = damageType.Trim().ToLowerInvariant();
             var resistance = GetResistanceValue(normalizedType);
             var vulnerability = GetVulnerabilityValue(normalizedType);
-            var adjusted = damage - resistance + vulnerability;
-            return Math.Max(0, adjusted);
+            var resistancePct = GetResistancePercentValue(normalizedType);
+            var vulnerabilityPct = GetVulnerabilityPercentValue(normalizedType);
+
+            var afterFlat = Math.Max(0, damage - resistance + vulnerability);
+            // Apply percent modifiers: positive percent increases damage (vulnerability), negative percent reduces (resistance percent stored as positive number)
+            var netPercent = (vulnerabilityPct - resistancePct);
+            var multiplied = (int)Math.Round(afterFlat * (1.0 + netPercent / 100.0));
+            return Math.Max(0, multiplied);
+        }
+
+        public int GetResistancePercentValue(string damageType)
+        {
+            if (string.IsNullOrWhiteSpace(damageType))
+                return 0;
+
+            var key = damageType.Trim().ToLowerInvariant();
+            return ResistancesPercent.TryGetValue(key, out var value) ? value : 0;
+        }
+
+        public int GetVulnerabilityPercentValue(string damageType)
+        {
+            if (string.IsNullOrWhiteSpace(damageType))
+                return 0;
+
+            var key = damageType.Trim().ToLowerInvariant();
+            return VulnerabilitiesPercent.TryGetValue(key, out var value) ? value : 0;
+        }
+
+        public void SetResistancePercent(string damageType, int percent)
+        {
+            if (string.IsNullOrWhiteSpace(damageType))
+                return;
+
+            var key = damageType.Trim().ToLowerInvariant();
+            if (percent <= 0)
+                ResistancesPercent.Remove(key);
+            else
+                ResistancesPercent[key] = percent;
+        }
+
+        public void SetVulnerabilityPercent(string damageType, int percent)
+        {
+            if (string.IsNullOrWhiteSpace(damageType))
+                return;
+
+            var key = damageType.Trim().ToLowerInvariant();
+            if (percent <= 0)
+                VulnerabilitiesPercent.Remove(key);
+            else
+                VulnerabilitiesPercent[key] = percent;
         }
 
         public string GetResistanceSummary()
@@ -315,6 +413,20 @@ namespace TormentaVTT.Models
             return Vulnerabilities.Count == 0
                 ? "Nenhuma"
                 : string.Join(", ", Vulnerabilities.Select(entry => $"{entry.Key}:{entry.Value}"));
+        }
+
+        public string GetResistancePercentSummary()
+        {
+            return ResistancesPercent.Count == 0
+                ? "Nenhuma"
+                : string.Join(", ", ResistancesPercent.Select(entry => $"{entry.Key}:{entry.Value}%"));
+        }
+
+        public string GetVulnerabilityPercentSummary()
+        {
+            return VulnerabilitiesPercent.Count == 0
+                ? "Nenhuma"
+                : string.Join(", ", VulnerabilitiesPercent.Select(entry => $"{entry.Key}:{entry.Value}%"));
         }
 
         public void AddCondition(string conditionName, int remainingTurns = -1)
