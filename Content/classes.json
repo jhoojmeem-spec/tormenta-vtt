@@ -1,0 +1,20 @@
+[
+  {
+    "id": "guerreiro",
+    "name": "Guerreiro",
+    "description": "Especialista em combate corpo a corpo e defesa pesada.",
+    "hitDie": 10,
+    "primaryAttributes": ["Força", "Constituição"],
+    "savingThrows": ["Força", "Constituição"],
+    "spellcasting": false
+  },
+  {
+    "id": "mago",
+    "name": "Mago",
+    "description": "Usuário de magias com foco em inteligência e efeitos arcanos.",
+    "hitDie": 6,
+    "primaryAttributes": ["Inteligência", "Sabedoria"],
+    "savingThrows": ["Inteligência", "Sabedoria"],
+    "spellcasting": true
+  }
+]

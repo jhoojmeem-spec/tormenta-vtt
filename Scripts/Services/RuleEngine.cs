@@ -45,24 +45,71 @@ namespace TormentaVTT.Services
         private int GetConditionCheckPenalty(CharacterSheet sheet)
         {
             var penalty = 0;
-            if (sheet.HasCondition("Atordoado") || sheet.HasCondition("Paralisado"))
-                penalty -= 2;
-            if (sheet.HasCondition("Exausto"))
-                penalty -= 1;
-            if (sheet.HasCondition("Desarmado"))
-                penalty -= 2;
+            if (sheet?.Conditions == null)
+                return 0;
+
+            // Sum any explicit 'check' modifiers present on conditions.
+            foreach (var cond in sheet.Conditions)
+            {
+                if (cond?.Modifiers == null)
+                    continue;
+
+                foreach (var kv in cond.Modifiers)
+                {
+                    var key = kv.Key?.Trim().ToLowerInvariant() ?? string.Empty;
+                    if (key == "check" || key == "checks" || key == "check_penalty" || key == "penalidade_check" || key == "penalidade")
+                    {
+                        penalty += kv.Value;
+                    }
+                }
+            }
+
+            // Backwards-compatible fallbacks for well-known condition names
+            if (penalty == 0)
+            {
+                if (sheet.HasCondition("Atordoado") || sheet.HasCondition("Paralisado"))
+                    penalty -= 2;
+                if (sheet.HasCondition("Exausto"))
+                    penalty -= 1;
+                if (sheet.HasCondition("Desarmado"))
+                    penalty -= 2;
+            }
+
             return penalty;
         }
 
         private int GetConditionAttackModifier(CharacterSheet sheet)
         {
             var modifier = 0;
-            if (sheet.HasCondition("Atordoado") || sheet.HasCondition("Paralisado"))
-                modifier -= 2;
-            if (sheet.HasCondition("Exausto"))
-                modifier -= 1;
-            if (sheet.HasCondition("Ameaçado"))
-                modifier += 2;
+            if (sheet?.Conditions == null)
+                return 0;
+
+            foreach (var cond in sheet.Conditions)
+            {
+                if (cond?.Modifiers == null)
+                    continue;
+
+                foreach (var kv in cond.Modifiers)
+                {
+                    var key = kv.Key?.Trim().ToLowerInvariant() ?? string.Empty;
+                    if (key == "attack" || key == "atk" || key == "attack_bonus" || key == "bônus_ataque" || key == "ataque")
+                    {
+                        modifier += kv.Value;
+                    }
+                }
+            }
+
+            // Backwards-compatible fallbacks
+            if (modifier == 0)
+            {
+                if (sheet.HasCondition("Atordoado") || sheet.HasCondition("Paralisado"))
+                    modifier -= 2;
+                if (sheet.HasCondition("Exausto"))
+                    modifier -= 1;
+                if (sheet.HasCondition("Ameaçado"))
+                    modifier += 2;
+            }
+
             return modifier;
         }
 

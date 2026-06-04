@@ -1,0 +1,20 @@
+[
+  {
+    "id": "humano",
+    "name": "Humano",
+    "description": "Versátil e adaptável, os humanos são os mestres da ambição e inovação.",
+    "attributeBonus": { "Força": 0, "Destreza": 0 },
+    "abilities": ["Talento Extra"],
+    "movementSpeed": 9,
+    "languages": ["Português", "Dragônico"]
+  },
+  {
+    "id": "elfo",
+    "name": "Elfo",
+    "description": "Elegantes e longevos, os elfos possuem uma conexão natural com a magia.",
+    "attributeBonus": { "Destreza": 2, "Inteligência": 0 },
+    "abilities": ["Visão Aguçada", "Vínculo com a Magia"],
+    "movementSpeed": 9,
+    "languages": ["Português", "Élfico"]
+  }
+]

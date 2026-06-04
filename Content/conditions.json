@@ -1,0 +1,16 @@
+[
+  {
+    "id": "atordoado",
+    "name": "Atordoado",
+    "description": "-2 na Defesa e nos testes de perícia. Não pode se mover se a condição durar mais de 2 turnos.",
+    "modifiers": { "Defense": -2 },
+    "isNegative": true
+  },
+  {
+    "id": "cego",
+    "name": "Cego",
+    "description": "Ataques contra o personagem têm vantagem; ele sofre penalidade em percepções visuais.",
+    "modifiers": { "AttackRoll": -2 },
+    "isNegative": true
+  }
+]

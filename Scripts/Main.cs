@@ -1,6 +1,8 @@
 using Godot;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using TormentaVTT.Importers;
 using TormentaVTT.Models;
 using TormentaVTT.Services;
 
@@ -14,6 +16,11 @@ namespace TormentaVTT.UI
         private DiceParser _diceParser = new();
         private RuleEngine _ruleEngine = new();
         private CombatController _combatController = new();
+        private ContentService _contentService = new();
+        private NetworkService _networkService = new();
+        private PdfImportService _pdfImportService = new();
+        private TextContentParser _textContentParser = new();
+        private DocumentImporter _documentImporter = new();
 
         private readonly (string NodeName, string AttributeName)[] _attributeInputs = new[]
         {
@@ -35,6 +42,36 @@ namespace TormentaVTT.UI
             ("LidarComAnimaisInput", "Lidar com Animais"),
             ("PersuasaoInput", "Persuasão")
         };
+
+        private ItemList? _contentClassesList;
+        private ItemList? _contentRacesList;
+        private ItemList? _contentPowersList;
+        private ItemList? _contentSpellsList;
+        private ItemList? _contentConditionsList;
+        private ItemList? _contentThreatsList;
+        private LineEdit? _spellTargetInput;
+        private LineEdit? _conditionDurationInput;
+        private LineEdit? _threatNameInput;
+        private Button? _applySelectedClassButton;
+        private Button? _applySelectedRaceButton;
+        private Button? _useSelectedPowerButton;
+        private Button? _castSelectedSpellButton;
+        private Button? _applySelectedConditionButton;
+        private Button? _removeSelectedConditionButton;
+        private Button? _spawnThreatButton;
+        // Sheet editor UI
+        private AcceptDialog? _sheetEditorDialog;
+        private LineEdit? _sheetEditorName;
+        private LineEdit? _sheetEditorClass;
+        private LineEdit? _sheetEditorHP;
+        private LineEdit? _sheetEditorPM;
+        private Dictionary<string, LineEdit> _sheetEditorAttributes = new();
+        // Network UI
+        private Button? _hostButton;
+        private Button? _joinButton;
+        private AcceptDialog? _connectDialog;
+        private LineEdit? _connectHostInput;
+        private LineEdit? _connectPortInput;
 
         public override void _Ready()
         {
@@ -80,6 +117,14 @@ namespace TormentaVTT.UI
             GetNode<Button>("Toolbar/TopButtons/StartCombatButton").Pressed += OnStartCombatPressed;
             GetNode<Button>("Toolbar/TopButtons/PrevTurnButton").Pressed += OnPrevTurnPressed;
             GetNode<Button>("Toolbar/TopButtons/NextTurnButton").Pressed += OnNextTurnPressed;
+            // Add network buttons dynamically
+            var topButtons = GetNode<HBoxContainer>("Toolbar/TopButtons");
+            _hostButton = new Button { Text = "Hospedar" };
+            _joinButton = new Button { Text = "Conectar" };
+            topButtons.AddChild(_hostButton);
+            topButtons.AddChild(_joinButton);
+            _hostButton.Pressed += OnHostPressed;
+            _joinButton.Pressed += OnJoinPressed;
             GetNode<ItemList>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeOrderList").ItemSelected += OnInitiativeSelected;
             GetNode<Button>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeMoveButtons/MoveUpButton").Pressed += OnMoveUpPressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeMoveButtons/MoveDownButton").Pressed += OnMoveDownPressed;
@@ -110,6 +155,11 @@ namespace TormentaVTT.UI
             LoadCampaign(_currentCampaign);
             UpdateAssetList();
             CreatePercentUi();
+            _contentService.LoadDefinitions();
+            CreateContentBrowserUi();
+            CreateSheetEditorUi();
+            CreateNetworkUi();
+            _chatController.SystemMessage($"Conteúdo carregado: {_contentService.ClassCount} classes, {_contentService.RaceCount} raças, {_contentService.PowerCount} poderes, {_contentService.SpellCount} magias, {_contentService.ConditionCount} condições, {_contentService.ThreatCount} ameaças.");
         }
 
         private void OnNewCampaignPressed()
@@ -207,7 +257,7 @@ namespace TormentaVTT.UI
 
             if (parts[0].Equals("/help", StringComparison.OrdinalIgnoreCase))
             {
-                _chatController.SystemMessage("Comandos disponíveis: /attack [alvo] [dano tipo], /damage [alvo] <expressão> [tipo], /damageaoe <raio> <expressão> [tipo], /sheet [token], /tokens, /select <token>, /target <token>, /rename [token] <novo_nome>, /delete [token], /startcombat, /endcombat, /order, /next, /prev, /resist [token] add|remove|list, /vuln [token] add|remove|list, /resistpct [token] add|remove|list, /vulnpct [token] add|remove|list, /condition [token] add|remove|list, /heal [token] <expr>, /init [all], /skill <nome>, /test <atributo>");
+                _chatController.SystemMessage("Comandos disponíveis: /attack [alvo] [dano tipo], /damage [alvo] <expressão> [tipo], /damageaoe <raio> <expressão> [tipo], /cast <magia> [alvo], /sheet [token], /tokens, /select <token>, /target <token>, /rename [token] <novo_nome>, /delete [token], /classes, /class <nome>, /applyclass <nome>, /spawnclass <nome> [nome_do_token], /spells, /spell <nome>, /conditions, /savecampaign <arquivo.json>, /loadcampaign <arquivo.json>, /startcombat, /endcombat, /order, /next, /prev, /resist [token] add|remove|list, /vuln [token] add|remove|list, /resistpct [token] add|remove|list, /vulnpct [token] add|remove|list, /condition [token] add <nome> [turnos]|remove <nome>|list, /heal [token] <expr>, /init [all], /skill <nome>, /test <atributo>, /importmodelagem, /documentimport");
                 return true;
             }
 
@@ -221,6 +271,319 @@ namespace TormentaVTT.UI
                 {
                     _chatController.SystemMessage($"Tokens: {string.Join(", ", _currentCampaign.Tokens.Select(t => t.Name))}");
                 }
+                return true;
+            }
+
+            if (parts[0].Equals("/classes", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_contentService.Classes.Count == 0)
+                {
+                    _chatController.SystemMessage("Nenhuma classe carregada.");
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Classes disponíveis: {string.Join(", ", _contentService.Classes.Select(c => c.Name))}");
+                }
+                return true;
+            }
+
+            if (parts[0].Equals("/class", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var className = string.Join(' ', parts[1..]);
+                var classDef = _contentService.Classes.FirstOrDefault(c => c.Name.Equals(className, StringComparison.OrdinalIgnoreCase) || c.Id.Equals(className, StringComparison.OrdinalIgnoreCase));
+                if (classDef == null)
+                {
+                    _chatController.SystemMessage($"Classe '{className}' não encontrada.");
+                    return true;
+                }
+
+                _chatController.SystemMessage($"Classe: {classDef.Name} / {classDef.Description} / Hit Die: d{classDef.HitDie} / Magia: {(classDef.Spellcasting ? "Sim" : "Não")}");
+                return true;
+            }
+
+            if (parts[0].Equals("/applyclass", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var className = string.Join(' ', parts[1..]);
+                var classDef = FindClassByName(className);
+                var selected = _mapController.SelectedToken;
+                if (selected == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para aplicar a classe.");
+                    return true;
+                }
+
+                if (classDef == null)
+                {
+                    _chatController.SystemMessage($"Classe '{className}' não encontrada.");
+                    return true;
+                }
+
+                ApplyClassDefinition(selected, classDef);
+                UpdateSelectionPanel(selected);
+                _chatController.SystemMessage($"Classe '{classDef.Name}' aplicada a {selected.Name}.");
+                return true;
+            }
+
+            if (parts[0].Equals("/spawnclass", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var className = parts[1];
+                var tokenName = parts.Length > 2 ? string.Join(' ', parts[2..]) : $"Sem Nome {className}";
+                var classDef = FindClassByName(className);
+                if (classDef == null)
+                {
+                    _chatController.SystemMessage($"Classe '{className}' não encontrada.");
+                    return true;
+                }
+
+                var token = TokenData.Create(tokenName, string.Empty);
+                token.Position = _mapController.GetViewportCenterMapPosition();
+                token.Sheet.CharacterClass = classDef.Name;
+                token.Sheet.Level = 1;
+                ApplyClassDefinition(token, classDef);
+                _currentCampaign.Tokens.Add(token);
+                _mapController.AddToken(token);
+                UpdateAssetList();
+                UpdateSelectionPanel(token);
+                _chatController.SystemMessage($"Token '{token.Name}' criado com a classe {classDef.Name}.");
+                return true;
+            }
+
+            if (parts[0].Equals("/spells", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_contentService.Spells.Count == 0)
+                {
+                    _chatController.SystemMessage("Nenhuma magia carregada.");
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Magias disponíveis: {string.Join(", ", _contentService.Spells.Select(s => s.Name))}");
+                }
+                return true;
+            }
+
+            if (parts[0].Equals("/importmodelagem", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("/documentimport", StringComparison.OrdinalIgnoreCase))
+            {
+                var basePath = System.IO.Directory.GetCurrentDirectory();
+                var inPath = System.IO.Path.Combine(basePath, "modelagem_vtt.txt");
+                var contentDir = System.IO.Path.Combine(basePath, "Content");
+                if (_documentImporter.TryImportDocument(inPath, contentDir, out var err))
+                {
+                    _chatController.SystemMessage(err);
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Falha na importação: {err}");
+                }
+                return true;
+            }
+
+            if (parts[0].Equals("/parsemodelagem", StringComparison.OrdinalIgnoreCase))
+            {
+                var basePath = System.IO.Directory.GetCurrentDirectory();
+                var rawText = string.Empty;
+                var importedJson = System.IO.Path.Combine(basePath, "Content", "imported_modelagem.json");
+                if (System.IO.File.Exists(importedJson))
+                {
+                    try
+                    {
+                        var j = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(importedJson));
+                        if (j.RootElement.TryGetProperty("raw", out var raw))
+                            rawText = raw.GetString() ?? string.Empty;
+                    }
+                    catch { rawText = System.IO.File.ReadAllText(System.IO.Path.Combine(basePath, "modelagem_vtt.txt")); }
+                }
+                else if (System.IO.File.Exists(System.IO.Path.Combine(basePath, "modelagem_vtt.txt")))
+                {
+                    rawText = System.IO.File.ReadAllText(System.IO.Path.Combine(basePath, "modelagem_vtt.txt"));
+                }
+
+                if (string.IsNullOrWhiteSpace(rawText))
+                {
+                    _chatController.SystemMessage("Nenhum texto de modelagem encontrado (modelagem_vtt.txt ou Content/imported_modelagem.json).");
+                    return true;
+                }
+
+                var parsed = _textContentParser.Parse(rawText);
+                _textContentParser.SaveParsedOutput(parsed, System.IO.Path.Combine(basePath, "Content"));
+                _chatController.SystemMessage($"Parser executado: gerados Content/classes_parsed.json, Content/spells_parsed.json, Content/conditions_parsed.json");
+                return true;
+            }
+
+            if (parts[0].Equals("/applyparsed", StringComparison.OrdinalIgnoreCase))
+            {
+                var basePath = System.IO.Directory.GetCurrentDirectory();
+                var contentDir = System.IO.Path.Combine(basePath, "Content");
+                var mapped = new (string parsed, string canonical)[]
+                {
+                    (System.IO.Path.Combine(contentDir, "classes_parsed.json"), System.IO.Path.Combine(contentDir, "classes.json")),
+                    (System.IO.Path.Combine(contentDir, "races_parsed.json"), System.IO.Path.Combine(contentDir, "races.json")),
+                    (System.IO.Path.Combine(contentDir, "powers_parsed.json"), System.IO.Path.Combine(contentDir, "powers.json")),
+                    (System.IO.Path.Combine(contentDir, "spells_parsed.json"), System.IO.Path.Combine(contentDir, "spells.json")),
+                    (System.IO.Path.Combine(contentDir, "conditions_parsed.json"), System.IO.Path.Combine(contentDir, "conditions.json")),
+                    (System.IO.Path.Combine(contentDir, "threats_parsed.json"), System.IO.Path.Combine(contentDir, "threats.json"))
+                };
+
+                var any = false;
+                foreach (var (p, c) in mapped)
+                {
+                    if (System.IO.File.Exists(p))
+                    {
+                        try
+                        {
+                            // If this is the parsed conditions file, normalize modifier keys first
+                            if (p.EndsWith("conditions_parsed.json", StringComparison.OrdinalIgnoreCase))
+                            {
+                                try
+                                {
+                                    var raw = System.IO.File.ReadAllText(p);
+                                    var list = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<TormentaVTT.Models.ConditionDefinition>>(raw);
+                                    if (list != null)
+                                    {
+                                        foreach (var cond in list)
+                                        {
+                                            if (cond.Modifiers == null) continue;
+                                            var normalized = new System.Collections.Generic.Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                                            foreach (var kv in cond.Modifiers)
+                                            {
+                                                var key = kv.Key?.Trim().ToLowerInvariant() ?? string.Empty;
+                                                var val = kv.Value;
+                                                string canonical;
+                                                if (key.Contains("def") || key.Contains("defesa")) canonical = "defense";
+                                                else if (key.Contains("attack") || key.Contains("atk") || key.Contains("ataque") || key.Contains("attackroll")) canonical = "attack";
+                                                else if (key.Contains("check") || key.Contains("penalidade") || key.Contains("penalty")) canonical = "check";
+                                                else if (key.Contains("resist")) canonical = "resistance";
+                                                else if (key.Contains("vuln")) canonical = "vulnerability";
+                                                else if (key.Contains("percent") || key.Contains("pct")) canonical = "percent";
+                                                else canonical = key;
+
+                                                // accumulate
+                                                if (normalized.ContainsKey(canonical)) normalized[canonical] += val;
+                                                else normalized[canonical] = val;
+                                            }
+                                            cond.Modifiers = normalized;
+                                        }
+
+                                        var outJson = System.Text.Json.JsonSerializer.Serialize(list, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                                        System.IO.File.WriteAllText(p, outJson);
+                                    }
+                                }
+                                catch { /* swallow errors and fallback to direct copy */ }
+                            }
+
+                            System.IO.File.Copy(p, c, true);
+                            any = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            _chatController.SystemMessage($"Falha ao aplicar {p} -> {c}: {ex.Message}");
+                            return true;
+                        }
+                    }
+                }
+
+                if (!any)
+                {
+                    _chatController.SystemMessage("Nenhum arquivo parsed encontrado em Content/*. Parsed: classes_parsed.json, races_parsed.json, powers_parsed.json, spells_parsed.json, conditions_parsed.json, threats_parsed.json");
+                    return true;
+                }
+
+                // Reload definitions and refresh UI lists
+                _contentService.LoadDefinitions();
+                RefreshContentLists();
+                _chatController.SystemMessage("Arquivos parsed aplicados e conteúdo recarregado.");
+                return true;
+            }
+
+            if (parts[0].Equals("/spell", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var spellName = string.Join(' ', parts[1..]);
+                var spellDef = _contentService.Spells.FirstOrDefault(s => s.Name.Equals(spellName, StringComparison.OrdinalIgnoreCase) || s.Id.Equals(spellName, StringComparison.OrdinalIgnoreCase));
+                if (spellDef == null)
+                {
+                    _chatController.SystemMessage($"Magia '{spellName}' não encontrada.");
+                    return true;
+                }
+
+                _chatController.SystemMessage($"Magia: {spellDef.Name} / Escola: {spellDef.School} / Círculo: {spellDef.Circle} / Custo PM: {spellDef.CostPM} / Alcance: {spellDef.Range} / Duração: {spellDef.Duration} / Alvo: {spellDef.TargetType} / Dano: {spellDef.DamageExpression} / Efeito: {spellDef.EffectType}");
+                return true;
+            }
+
+            if (parts[0].Equals("/conditions", StringComparison.OrdinalIgnoreCase))
+            {
+                if (_contentService.Conditions.Count == 0)
+                {
+                    _chatController.SystemMessage("Nenhuma condição carregada.");
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Condições disponíveis: {string.Join(", ", _contentService.Conditions.Select(c => c.Name))}");
+                }
+                return true;
+            }
+
+            if (parts[0].Equals("/savecampaign", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var pathIndex = 1;
+                var pathText = ExtractQuotedName(parts, ref pathIndex);
+                if (string.IsNullOrWhiteSpace(pathText))
+                {
+                    pathText = string.Join(' ', parts[pathIndex..]);
+                }
+
+                if (string.IsNullOrWhiteSpace(pathText))
+                {
+                    _chatController.SystemMessage("Uso: /savecampaign <arquivo.json>");
+                    return true;
+                }
+
+                var actualPath = System.IO.Path.GetFullPath(pathText.EndsWith(".json") ? pathText : pathText + ".json");
+                _currentCampaign.Name = GetNode<LineEdit>("Toolbar/TopButtons/CampaignName")?.Text ?? _currentCampaign.Name;
+                _currentCampaign.Zoom = _mapController.CurrentZoom;
+                _currentCampaign.GridEnabled = _mapController.IsGridEnabled;
+                _currentCampaign.CombatActive = _combatController.InCombat;
+                _currentCampaign.CombatOrder = _combatController.GetOrderIds();
+                _currentCampaign.CombatOrderRolls = _combatController.GetOrderRolls();
+                _currentCampaign.CombatCurrentIndex = _combatController.GetCurrentIndex();
+
+                if (PersistenceService.SaveCampaign(_currentCampaign, actualPath))
+                {
+                    _chatController.SystemMessage($"Campanha salva em: {actualPath}");
+                }
+                else
+                {
+                    _chatController.SystemMessage("Falha ao salvar campanha.");
+                }
+
+                return true;
+            }
+
+            if (parts[0].Equals("/loadcampaign", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var pathIndex = 1;
+                var pathText = ExtractQuotedName(parts, ref pathIndex);
+                if (string.IsNullOrWhiteSpace(pathText))
+                {
+                    pathText = string.Join(' ', parts[pathIndex..]);
+                }
+
+                if (string.IsNullOrWhiteSpace(pathText))
+                {
+                    _chatController.SystemMessage("Uso: /loadcampaign <arquivo.json>");
+                    return true;
+                }
+
+                var actualPath = System.IO.Path.GetFullPath(pathText);
+                var campaign = PersistenceService.LoadCampaign(actualPath);
+                if (campaign == null)
+                {
+                    _chatController.SystemMessage("Falha ao carregar campanha.");
+                    return true;
+                }
+
+                _currentCampaign = campaign;
+                LoadCampaign(_currentCampaign);
+                UpdateAssetList();
+                _chatController.SystemMessage($"Campanha carregada: {_currentCampaign.Name}");
                 return true;
             }
 
@@ -433,6 +796,75 @@ namespace TormentaVTT.UI
                 target.Sheet.HP += healResult.Total;
                 _chatController.AddSystemMessage($"{target.Name} recupera {healResult.Total} PV ({healResult.Breakdown}). PV atuais: {target.Sheet.HP}.");
                 UpdateSelectionPanel(target);
+                return true;
+            }
+
+            if (parts[0].Equals("/cast", StringComparison.OrdinalIgnoreCase) && parts.Length > 1)
+            {
+                var startIdx = 1;
+                var spellName = ExtractQuotedName(parts, ref startIdx);
+                if (string.IsNullOrWhiteSpace(spellName))
+                {
+                    spellName = string.Join(' ', parts[startIdx..]);
+                    startIdx = parts.Length;
+                }
+
+                var spell = FindSpellByName(spellName);
+                if (spell == null)
+                {
+                    _chatController.SystemMessage($"Magia '{spellName}' não encontrada.");
+                    return true;
+                }
+
+                var caster = _mapController.SelectedToken;
+                if (caster == null)
+                {
+                    _chatController.SystemMessage("Selecione um token para lançar a magia.");
+                    return true;
+                }
+
+                if (caster.Sheet.PM < spell.CostPM)
+                {
+                    _chatController.SystemMessage($"{caster.Name} não tem PM suficiente para lançar {spell.Name} ({spell.CostPM} PM).");
+                    return true;
+                }
+
+                caster.Sheet.PM -= spell.CostPM;
+                TokenData? target = null;
+
+                if (spell.TargetType.Equals("self", StringComparison.OrdinalIgnoreCase))
+                {
+                    target = caster;
+                }
+                else
+                {
+                    target = ResolveTargetToken(parts, ref startIdx) ?? caster;
+                }
+
+                if (target == null)
+                {
+                    _chatController.SystemMessage("Nenhum alvo disponível para a magia.");
+                    return true;
+                }
+
+                var roll = _diceParser.Evaluate(spell.DamageExpression);
+                if (spell.IsHealing)
+                {
+                    target.Sheet.HP += roll.Total;
+                    _chatController.AddSystemMessage($"{caster.Name} lança {spell.Name} em {target.Name}: +{roll.Total} PV ({roll.Breakdown}). PV atuais: {target.Sheet.HP}.");
+                }
+                else
+                {
+                    var damage = target.Sheet.GetDamageAfterTypeModifiers(roll.Total, string.Empty);
+                    OnApplyDamage(target.Id, damage);
+                    _chatController.AddSystemMessage($"{caster.Name} lança {spell.Name} em {target.Name}: {damage} dano ({roll.Total} base, {roll.Breakdown}).");
+                }
+
+                UpdateSelectionPanel(caster);
+                if (target.Id != caster.Id)
+                {
+                    UpdateSelectionPanel(target);
+                }
                 return true;
             }
 
@@ -1009,6 +1441,34 @@ namespace TormentaVTT.UI
             return _mapController.SelectedToken;
         }
 
+        private string ExtractQuotedName(string[] parts, ref int index)
+        {
+            if (index >= parts.Length)
+                return string.Empty;
+
+            if (parts[index].StartsWith('"'))
+            {
+                var collected = new List<string> { parts[index] };
+                if (parts[index].EndsWith('"') && parts[index].Length > 1)
+                {
+                    index++;
+                    return parts[index - 1].Trim('"');
+                }
+
+                for (var i = index + 1; i < parts.Length; i++)
+                {
+                    collected.Add(parts[i]);
+                    if (parts[i].EndsWith('"'))
+                    {
+                        index = i + 1;
+                        return string.Join(' ', collected).Trim('"');
+                    }
+                }
+            }
+
+            return string.Empty;
+        }
+
         private string ExtractTokenName(string[] parts, ref int index)
         {
             if (index >= parts.Length)
@@ -1062,6 +1522,32 @@ namespace TormentaVTT.UI
                 return null;
 
             return _currentCampaign.Tokens.Find(t => t.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private ClassDefinition? FindClassByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            return _contentService.Classes.FirstOrDefault(c => c.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase) || c.Id.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private SpellDefinition? FindSpellByName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            return _contentService.Spells.FirstOrDefault(s => s.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase) || s.Id.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void ApplyClassDefinition(TokenData token, ClassDefinition classDef)
+        {
+            token.Sheet.CharacterClass = classDef.Name;
+            token.Sheet.HP = Math.Max(token.Sheet.HP, classDef.HitDie + token.Sheet.GetAttributeModifier("Constituição") + token.Sheet.Level);
+            if (classDef.Spellcasting && token.Sheet.PM <= 0)
+            {
+                token.Sheet.PM = 10 + token.Sheet.GetAttributeModifier("Inteligência");
+            }
         }
 
         private static (string DamageExpression, string DamageType) ParseAttackDamage(string[] parts, int startIndex)
@@ -1492,6 +1978,926 @@ namespace TormentaVTT.UI
             vulnPctList.Pressed += () => { OnUiListVulnerabilityPercent(); };
         }
 
+        private void CreateContentBrowserUi()
+        {
+            var sidebar = GetNode<VBoxContainer>("SidebarPanel/SidebarVBox");
+
+            var classesLabel = new Label { Text = "Classes carregadas" };
+            _contentClassesList = new ItemList
+            {
+                Name = "ContentClassesList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 120)
+            };
+            _applySelectedClassButton = new Button { Text = "Aplicar classe" };
+            var classButtons = new HBoxContainer();
+            var reloadContentButton = new Button { Text = "Recarregar conteúdo" };
+            var importModelButton = new Button { Text = "Importar modelagem" };
+            classButtons.AddChild(reloadContentButton);
+            classButtons.AddChild(importModelButton);
+            sidebar.AddChild(classesLabel);
+            sidebar.AddChild(_contentClassesList);
+            sidebar.AddChild(_applySelectedClassButton);
+            sidebar.AddChild(classButtons);
+
+            var racesLabel = new Label { Text = "Raças carregadas" };
+            _contentRacesList = new ItemList
+            {
+                Name = "ContentRacesList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 100)
+            };
+            _applySelectedRaceButton = new Button { Text = "Aplicar raça" };
+            sidebar.AddChild(racesLabel);
+            sidebar.AddChild(_contentRacesList);
+            sidebar.AddChild(_applySelectedRaceButton);
+
+            var powersLabel = new Label { Text = "Poderes carregados" };
+            _contentPowersList = new ItemList
+            {
+                Name = "ContentPowersList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 100)
+            };
+            _useSelectedPowerButton = new Button { Text = "Usar poder" };
+            sidebar.AddChild(powersLabel);
+            sidebar.AddChild(_contentPowersList);
+            sidebar.AddChild(_useSelectedPowerButton);
+
+            var spellsLabel = new Label { Text = "Magias carregadas" };
+            _contentSpellsList = new ItemList
+            {
+                Name = "ContentSpellsList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 120)
+            };
+            var spellRow = new HBoxContainer();
+            _spellTargetInput = new LineEdit { Name = "SpellTargetInput", PlaceholderText = "alvo (opcional)" };
+            _castSelectedSpellButton = new Button { Text = "Lançar magia" };
+            spellRow.AddChild(_spellTargetInput);
+            spellRow.AddChild(_castSelectedSpellButton);
+
+            sidebar.AddChild(spellsLabel);
+            sidebar.AddChild(_contentSpellsList);
+            sidebar.AddChild(spellRow);
+
+            if (_applySelectedClassButton != null)
+                _applySelectedClassButton.Pressed += OnApplySelectedClassPressed;
+            if (_castSelectedSpellButton != null)
+                _castSelectedSpellButton.Pressed += OnCastSelectedSpellPressed;
+            if (_contentClassesList != null)
+                _contentClassesList.ItemSelected += OnContentClassSelected;
+            if (_contentSpellsList != null)
+                _contentSpellsList.ItemSelected += OnContentSpellSelected;
+            if (_applySelectedRaceButton != null)
+                _applySelectedRaceButton.Pressed += OnApplySelectedRacePressed;
+            if (_contentRacesList != null)
+                _contentRacesList.ItemSelected += OnContentRaceSelected;
+            if (_useSelectedPowerButton != null)
+                _useSelectedPowerButton.Pressed += OnUseSelectedPowerPressed;
+            if (_contentPowersList != null)
+                _contentPowersList.ItemSelected += OnContentPowerSelected;
+
+            reloadContentButton.Pressed += () => {
+                _contentService.LoadDefinitions();
+                RefreshContentLists();
+                _chatController.SystemMessage("Conteúdo recarregado.");
+            };
+            importModelButton.Pressed += () => {
+                var basePath = System.IO.Directory.GetCurrentDirectory();
+                var inPath = System.IO.Path.Combine(basePath, "modelagem_vtt.txt");
+                var contentDir = System.IO.Path.Combine(basePath, "Content");
+                if (_documentImporter.TryImportDocument(inPath, contentDir, out var err))
+                {
+                    _contentService.LoadDefinitions();
+                    RefreshContentLists();
+                    _chatController.SystemMessage(err);
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Falha na importação: {err}");
+                }
+            };
+
+            var conditionsLabel = new Label { Text = "Condições carregadas" };
+            _contentConditionsList = new ItemList
+            {
+                Name = "ContentConditionsList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 120)
+            };
+            var conditionRow = new HBoxContainer();
+            _conditionDurationInput = new LineEdit { Name = "ConditionDurationInput", PlaceholderText = "turnos (opcional)" };
+            _applySelectedConditionButton = new Button { Text = "Aplicar condição" };
+            _removeSelectedConditionButton = new Button { Text = "Remover condição" };
+            conditionRow.AddChild(_conditionDurationInput);
+            conditionRow.AddChild(_applySelectedConditionButton);
+            conditionRow.AddChild(_removeSelectedConditionButton);
+
+            sidebar.AddChild(conditionsLabel);
+            sidebar.AddChild(_contentConditionsList);
+            sidebar.AddChild(conditionRow);
+
+            if (_contentConditionsList != null)
+                _contentConditionsList.ItemSelected += OnContentConditionSelected;
+            if (_applySelectedConditionButton != null)
+                _applySelectedConditionButton.Pressed += OnApplySelectedConditionPressed;
+            if (_removeSelectedConditionButton != null)
+                _removeSelectedConditionButton.Pressed += OnRemoveSelectedConditionPressed;
+
+            var threatsLabel = new Label { Text = "Ameaças carregadas" };
+            _contentThreatsList = new ItemList
+            {
+                Name = "ContentThreatsList",
+                SelectMode = ItemList.SelectModeEnum.Single,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 100)
+            };
+            var threatRow = new HBoxContainer();
+            _threatNameInput = new LineEdit { Name = "ThreatNameInput", PlaceholderText = "nome (opcional)" };
+            _spawnThreatButton = new Button { Text = "Spawnar ameaça" };
+            threatRow.AddChild(_threatNameInput);
+            threatRow.AddChild(_spawnThreatButton);
+
+            sidebar.AddChild(threatsLabel);
+            sidebar.AddChild(_contentThreatsList);
+            sidebar.AddChild(threatRow);
+
+            if (_contentThreatsList != null)
+                _contentThreatsList.ItemSelected += OnContentThreatSelected;
+            if (_spawnThreatButton != null)
+                _spawnThreatButton.Pressed += OnSpawnThreatPressed;
+
+            // Sheet import/export
+            var sheetRow = new HBoxContainer();
+            var exportBtn = new Button { Text = "Exportar ficha" };
+            var importBtn = new Button { Text = "Importar ficha" };
+            var editBtn = new Button { Text = "Editar ficha" };
+            sheetRow.AddChild(exportBtn);
+            sheetRow.AddChild(importBtn);
+            sheetRow.AddChild(editBtn);
+            sidebar.AddChild(sheetRow);
+
+            exportBtn.Pressed += () => ShowSheetSaveDialog();
+            importBtn.Pressed += () => ShowSheetOpenDialog();
+            editBtn.Pressed += () => ShowSheetEditor();
+
+
+            _contentClassesList?.Clear();
+            if (_contentClassesList != null)
+            {
+                foreach (var classDef in _contentService.Classes)
+                {
+                    var index = _contentClassesList.AddItem(classDef.Name);
+                    _contentClassesList.SetItemMetadata(index, classDef.Name);
+                }
+            }
+
+            _contentRacesList?.Clear();
+            if (_contentRacesList != null)
+            {
+                foreach (var raceDef in _contentService.Races)
+                {
+                    var index = _contentRacesList.AddItem(raceDef.Name);
+                    _contentRacesList.SetItemMetadata(index, raceDef.Name);
+                }
+            }
+
+            _contentPowersList?.Clear();
+            if (_contentPowersList != null)
+            {
+                foreach (var powerDef in _contentService.Powers)
+                {
+                    var index = _contentPowersList.AddItem(powerDef.Name);
+                    _contentPowersList.SetItemMetadata(index, powerDef.Name);
+                }
+            }
+
+            _contentSpellsList?.Clear();
+            if (_contentSpellsList != null)
+            {
+                foreach (var spellDef in _contentService.Spells)
+                {
+                    var index = _contentSpellsList.AddItem(spellDef.Name);
+                    _contentSpellsList.SetItemMetadata(index, spellDef.Name);
+                }
+            }
+
+            _contentConditionsList?.Clear();
+            if (_contentConditionsList != null)
+            {
+                foreach (var conditionDef in _contentService.Conditions)
+                {
+                    var index = _contentConditionsList.AddItem(conditionDef.Name);
+                    _contentConditionsList.SetItemMetadata(index, conditionDef.Name);
+                }
+            }
+
+            _contentThreatsList?.Clear();
+            if (_contentThreatsList != null)
+            {
+                foreach (var threatDef in _contentService.Threats)
+                {
+                    var index = _contentThreatsList.AddItem(threatDef.Name);
+                    _contentThreatsList.SetItemMetadata(index, threatDef.Name);
+                }
+            }
+        }
+
+        private void OnContentClassSelected(long index)
+        {
+            if (_contentClassesList == null || index < 0 || index >= _contentClassesList.ItemCount)
+                return;
+
+            var className = _contentClassesList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(className))
+                return;
+
+            var classDef = FindClassByName(className);
+            if (classDef != null)
+            {
+                _chatController.SystemMessage($"Classe selecionada: {classDef.Name} / {classDef.Description} / Hit Die: d{classDef.HitDie} / Magia: {(classDef.Spellcasting ? "Sim" : "Não")}");
+            }
+        }
+
+        private void OnContentSpellSelected(long index)
+        {
+            if (_contentSpellsList == null || index < 0 || index >= _contentSpellsList.ItemCount)
+                return;
+
+            var spellName = _contentSpellsList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(spellName))
+                return;
+
+            var spellDef = FindSpellByName(spellName);
+            if (spellDef != null)
+            {
+                _chatController.SystemMessage($"Magia selecionada: {spellDef.Name} / {spellDef.School} círculo {spellDef.Circle} / Custo PM: {spellDef.CostPM} / Alcance: {spellDef.Range}");
+            }
+        }
+
+        private void OnContentConditionSelected(long index)
+        {
+            if (_contentConditionsList == null || index < 0 || index >= _contentConditionsList.ItemCount)
+                return;
+
+            var conditionName = _contentConditionsList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(conditionName))
+                return;
+
+            var conditionDef = _contentService.Conditions.FirstOrDefault(c => c.Name.Equals(conditionName, StringComparison.OrdinalIgnoreCase) || c.Id.Equals(conditionName, StringComparison.OrdinalIgnoreCase));
+            if (conditionDef != null)
+            {
+                _chatController.SystemMessage($"Condição selecionada: {conditionDef.Name} / {conditionDef.Description}");
+            }
+        }
+
+        private void OnApplySelectedConditionPressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para aplicar a condição.");
+                return;
+            }
+
+            if (_contentConditionsList == null)
+            {
+                _chatController.SystemMessage("Lista de condições não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentConditionsList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma condição na lista.");
+                return;
+            }
+
+            var conditionName = _contentConditionsList.GetItemMetadata(selectedItems[0]).ToString();
+            var conditionDef = _contentService.Conditions.FirstOrDefault(c => c.Name.Equals(conditionName, StringComparison.OrdinalIgnoreCase) || c.Id.Equals(conditionName, StringComparison.OrdinalIgnoreCase));
+            if (conditionDef == null)
+            {
+                _chatController.SystemMessage("Condição selecionada não encontrada.");
+                return;
+            }
+
+            var duration = -1;
+            if (int.TryParse(_conditionDurationInput?.Text, out var parsedDuration) && parsedDuration > 0)
+                duration = parsedDuration;
+
+            selected.Sheet.AddConditionFromDefinition(conditionDef, duration);
+            UpdateSelectionPanel(selected);
+            UpdateConditionList(selected);
+            var durationText = duration > 0 ? $" por {duration} turnos" : string.Empty;
+            _chatController.SystemMessage($"Condição '{conditionDef.Name}' aplicada a {selected.Name}{durationText}.");
+        }
+
+        private void OnRemoveSelectedConditionPressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para remover a condição.");
+                return;
+            }
+
+            if (_contentConditionsList == null)
+            {
+                _chatController.SystemMessage("Lista de condições não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentConditionsList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma condição na lista.");
+                return;
+            }
+
+            var conditionName = _contentConditionsList.GetItemMetadata(selectedItems[0]).ToString();
+            selected.Sheet.RemoveCondition(conditionName ?? string.Empty);
+            UpdateSelectionPanel(selected);
+            UpdateConditionList(selected);
+            _chatController.SystemMessage($"Condição '{conditionName}' removida de {selected.Name}.");
+        }
+
+        private void OnContentRaceSelected(long index)
+        {
+            if (_contentRacesList == null || index < 0 || index >= _contentRacesList.ItemCount)
+                return;
+
+            var raceName = _contentRacesList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(raceName))
+                return;
+
+            var raceDef = _contentService.Races.FirstOrDefault(r => r.Name.Equals(raceName, StringComparison.OrdinalIgnoreCase) || r.Id.Equals(raceName, StringComparison.OrdinalIgnoreCase));
+            if (raceDef != null)
+            {
+                var bonus = string.Join(", ", raceDef.AttributeBonus.Select(kv => $"{kv.Key}:{kv.Value}"));
+                _chatController.SystemMessage($"Raça selecionada: {raceDef.Name} / Bônus: {bonus} / Velocidade: {raceDef.MovementSpeed}m / Idiomas: {string.Join(", ", raceDef.Languages)}");
+            }
+        }
+
+        private void OnApplySelectedRacePressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para aplicar a raça.");
+                return;
+            }
+
+            if (_contentRacesList == null)
+            {
+                _chatController.SystemMessage("Lista de raças não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentRacesList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma raça na lista.");
+                return;
+            }
+
+            var raceName = _contentRacesList.GetItemMetadata(selectedItems[0]).ToString();
+            var raceDef = _contentService.Races.FirstOrDefault(r => r.Name.Equals(raceName, StringComparison.OrdinalIgnoreCase) || r.Id.Equals(raceName, StringComparison.OrdinalIgnoreCase));
+            if (raceDef == null)
+            {
+                _chatController.SystemMessage("Raça selecionada não encontrada.");
+                return;
+            }
+
+            selected.Sheet.Race = raceDef.Name;
+            foreach (var bonus in raceDef.AttributeBonus)
+            {
+                if (selected.Sheet.Attributes.ContainsKey(bonus.Key))
+                    selected.Sheet.Attributes[bonus.Key] += bonus.Value;
+            }
+            UpdateSelectionPanel(selected);
+            _chatController.SystemMessage($"Raça '{raceDef.Name}' aplicada a {selected.Name}.");
+        }
+
+        private void OnContentPowerSelected(long index)
+        {
+            if (_contentPowersList == null || index < 0 || index >= _contentPowersList.ItemCount)
+                return;
+
+            var powerName = _contentPowersList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(powerName))
+                return;
+
+            var powerDef = _contentService.Powers.FirstOrDefault(p => p.Name.Equals(powerName, StringComparison.OrdinalIgnoreCase) || p.Id.Equals(powerName, StringComparison.OrdinalIgnoreCase));
+            if (powerDef != null)
+            {
+                _chatController.SystemMessage($"Poder selecionado: {powerDef.Name} / Tipo: {powerDef.Type} / {powerDef.Description}");
+            }
+        }
+
+        private void OnUseSelectedPowerPressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para usar o poder.");
+                return;
+            }
+
+            if (_contentPowersList == null)
+            {
+                _chatController.SystemMessage("Lista de poderes não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentPowersList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione um poder na lista.");
+                return;
+            }
+
+            var powerName = _contentPowersList.GetItemMetadata(selectedItems[0]).ToString();
+            var powerDef = _contentService.Powers.FirstOrDefault(p => p.Name.Equals(powerName, StringComparison.OrdinalIgnoreCase) || p.Id.Equals(powerName, StringComparison.OrdinalIgnoreCase));
+            if (powerDef == null)
+            {
+                _chatController.SystemMessage("Poder selecionado não encontrado.");
+                return;
+            }
+
+            _chatController.SystemMessage($"{selected.Name} usa {powerDef.Name}: {string.Join(", ", powerDef.Effects)}");
+        }
+
+        private void OnContentThreatSelected(long index)
+        {
+            if (_contentThreatsList == null || index < 0 || index >= _contentThreatsList.ItemCount)
+                return;
+
+            var threatName = _contentThreatsList.GetItemMetadata((int)index).ToString();
+            if (string.IsNullOrEmpty(threatName))
+                return;
+
+            var threatDef = _contentService.Threats.FirstOrDefault(t => t.Name.Equals(threatName, StringComparison.OrdinalIgnoreCase) || t.Id.Equals(threatName, StringComparison.OrdinalIgnoreCase));
+            if (threatDef != null)
+            {
+                _chatController.SystemMessage($"Ameaça: {threatDef.Name} / Tipo: {threatDef.Type} / Nível: {threatDef.Level} / PV: {threatDef.HP} / Defesa: {threatDef.Defense}");
+            }
+        }
+
+        private void OnSpawnThreatPressed()
+        {
+            if (_contentThreatsList == null)
+            {
+                _chatController.SystemMessage("Lista de ameaças não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentThreatsList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma ameaça na lista.");
+                return;
+            }
+
+            var threatName = _contentThreatsList.GetItemMetadata(selectedItems[0]).ToString();
+            var threatDef = _contentService.Threats.FirstOrDefault(t => t.Name.Equals(threatName, StringComparison.OrdinalIgnoreCase) || t.Id.Equals(threatName, StringComparison.OrdinalIgnoreCase));
+            if (threatDef == null)
+            {
+                _chatController.SystemMessage("Ameaça selecionada não encontrada.");
+                return;
+            }
+
+            var tokenName = _threatNameInput?.Text?.Trim();
+            if (string.IsNullOrEmpty(tokenName))
+                tokenName = threatDef.Name;
+
+            var token = TokenData.Create(tokenName, string.Empty);
+            token.Sheet.Name = tokenName;
+            token.Sheet.CharacterClass = threatDef.Type;
+            token.Sheet.Level = threatDef.Level;
+            token.Sheet.HP = threatDef.HP;
+            token.Sheet.Defense = threatDef.Defense;
+
+            foreach (var attr in threatDef.Attributes)
+            {
+                if (token.Sheet.Attributes.ContainsKey(attr.Key))
+                    token.Sheet.Attributes[attr.Key] = attr.Value;
+            }
+
+            token.Position = _mapController.GetViewportCenterMapPosition();
+            _currentCampaign.Tokens.Add(token);
+            _mapController.AddToken(token);
+            UpdateAssetList();
+            _chatController.SystemMessage($"Ameaça '{tokenName}' spawnada no mapa.");
+        }
+
+        private void CreateSheetEditorUi()
+        {
+            _sheetEditorDialog = new AcceptDialog { Name = "SheetEditorDialog", Title = "Editor de Ficha", Visible = false };
+            var vbox = new VBoxContainer();
+
+            _sheetEditorName = new LineEdit { PlaceholderText = "Nome" };
+            _sheetEditorClass = new LineEdit { PlaceholderText = "Classe" };
+            _sheetEditorHP = new LineEdit { PlaceholderText = "PV" };
+            _sheetEditorPM = new LineEdit { PlaceholderText = "PM" };
+
+            vbox.AddChild(new Label { Text = "Nome" });
+            vbox.AddChild(_sheetEditorName);
+            vbox.AddChild(new Label { Text = "Classe" });
+            vbox.AddChild(_sheetEditorClass);
+            vbox.AddChild(new Label { Text = "PV" });
+            vbox.AddChild(_sheetEditorHP);
+            vbox.AddChild(new Label { Text = "PM" });
+            vbox.AddChild(_sheetEditorPM);
+
+            vbox.AddChild(new Label { Text = "Atributos" });
+            var grid = new GridContainer { Columns = 2 };
+            foreach (var attr in new[] { "Força", "Destreza", "Constituição", "Inteligência", "Sabedoria", "Carisma" })
+            {
+                var lbl = new Label { Text = attr };
+                var le = new LineEdit { PlaceholderText = "0" };
+                _sheetEditorAttributes[attr] = le;
+                grid.AddChild(lbl);
+                grid.AddChild(le);
+            }
+            vbox.AddChild(grid);
+
+            var btnRow = new HBoxContainer();
+            var saveTemplate = new Button { Text = "Salvar como template" };
+            var applyBtn = new Button { Text = "Aplicar à seleção" };
+            btnRow.AddChild(saveTemplate);
+            btnRow.AddChild(applyBtn);
+            vbox.AddChild(btnRow);
+
+            _sheetEditorDialog.AddChild(vbox);
+            AddChild(_sheetEditorDialog);
+
+            saveTemplate.Pressed += OnSheetEditorSavePressed;
+            applyBtn.Pressed += OnSheetEditorApplyPressed;
+        }
+
+        private void RefreshContentLists()
+        {
+            _contentClassesList?.Clear();
+            if (_contentClassesList != null)
+            {
+                foreach (var classDef in _contentService.Classes)
+                {
+                    var index = _contentClassesList.AddItem(classDef.Name);
+                    _contentClassesList.SetItemMetadata(index, classDef.Name);
+                }
+            }
+
+            _contentSpellsList?.Clear();
+            if (_contentSpellsList != null)
+            {
+                foreach (var spellDef in _contentService.Spells)
+                {
+                    var index = _contentSpellsList.AddItem(spellDef.Name);
+                    _contentSpellsList.SetItemMetadata(index, spellDef.Name);
+                }
+            }
+
+            _contentConditionsList?.Clear();
+            if (_contentConditionsList != null)
+            {
+                foreach (var conditionDef in _contentService.Conditions)
+                {
+                    var index = _contentConditionsList.AddItem(conditionDef.Name);
+                    _contentConditionsList.SetItemMetadata(index, conditionDef.Name);
+                }
+            }
+        }
+
+        private void CreateNetworkUi()
+        {
+            _connectDialog = new AcceptDialog { Title = "Conectar ao host" };
+            var v = new VBoxContainer();
+            _connectHostInput = new LineEdit { PlaceholderText = "host (ex: 127.0.0.1)" };
+            _connectPortInput = new LineEdit { PlaceholderText = "porta (ex: 12345)" };
+            v.AddChild(new Label { Text = "Host" });
+            v.AddChild(_connectHostInput);
+            v.AddChild(new Label { Text = "Porta" });
+            v.AddChild(_connectPortInput);
+            _connectDialog.AddChild(v);
+            AddChild(_connectDialog);
+            _connectDialog.Confirmed += () =>
+            {
+                var host = _connectHostInput?.Text ?? "127.0.0.1";
+                var portText = _connectPortInput?.Text ?? "12345";
+                if (!int.TryParse(portText, out var port)) port = 12345;
+                var ok = _networkService.Join(host, port);
+                if (ok)
+                {
+                    _chatController.SystemMessage($"Conectado a {host}:{port}");
+                    _networkService.MessageReceived += msg =>
+                    {
+                        _chatController.AddSystemMessage($"[rede] {msg}");
+                    };
+                }
+                else
+                {
+                    _chatController.SystemMessage($"Falha ao conectar a {host}:{port}");
+                }
+            };
+        }
+
+        private void ShowSheetEditor()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token antes de editar a ficha.");
+                return;
+            }
+
+            // Populate
+            _sheetEditorName!.Text = selected.Sheet.Name ?? string.Empty;
+            _sheetEditorClass!.Text = selected.Sheet.CharacterClass ?? string.Empty;
+            _sheetEditorHP!.Text = selected.Sheet.HP.ToString();
+            _sheetEditorPM!.Text = selected.Sheet.PM.ToString();
+            foreach (var attr in selected.Sheet.Attributes)
+            {
+                if (_sheetEditorAttributes.TryGetValue(attr.Key, out var le))
+                    le.Text = attr.Value.ToString();
+            }
+
+            _sheetEditorDialog!.PopupCenteredRatio();
+        }
+
+        private void OnSheetEditorApplyPressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para aplicar a ficha.");
+                return;
+            }
+
+            ApplyEditorToSelected(selected);
+            _sheetEditorDialog!.Hide();
+            UpdateSelectionPanel(selected);
+            _chatController.SystemMessage($"Ficha aplicada a {selected.Name}.");
+        }
+
+        private void OnSheetEditorSavePressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para salvar a ficha como template.");
+                return;
+            }
+
+            ApplyEditorToSelected(selected);
+
+            var fileName = string.IsNullOrWhiteSpace(selected.Sheet.Name) ? selected.Name : selected.Sheet.Name;
+            var sanitized = string.Join("_", fileName.Split(System.IO.Path.GetInvalidFileNameChars()));
+            var templatesDir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Content", "Sheets");
+            if (!System.IO.Directory.Exists(templatesDir))
+                System.IO.Directory.CreateDirectory(templatesDir);
+
+            var filePath = System.IO.Path.Combine(templatesDir, sanitized + ".json");
+            var dict = selected.Sheet.ToDictionary();
+            var plain = ConvertGodotToPlainObject(dict);
+            var json = System.Text.Json.JsonSerializer.Serialize(plain, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            try
+            {
+                System.IO.File.WriteAllText(filePath, json);
+                _chatController.SystemMessage($"Template salvo: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                _chatController.SystemMessage($"Falha ao salvar template: {ex.Message}");
+            }
+        }
+
+        private void ApplyEditorToSelected(TokenData selected)
+        {
+            if (selected == null)
+                return;
+
+            if (_sheetEditorName != null) selected.Sheet.Name = _sheetEditorName.Text;
+            if (_sheetEditorClass != null) selected.Sheet.CharacterClass = _sheetEditorClass.Text;
+            if (_sheetEditorHP != null && int.TryParse(_sheetEditorHP.Text, out var hp)) selected.Sheet.HP = hp;
+            if (_sheetEditorPM != null && int.TryParse(_sheetEditorPM.Text, out var pm)) selected.Sheet.PM = pm;
+
+            foreach (var kv in _sheetEditorAttributes)
+            {
+                if (int.TryParse(kv.Value.Text, out var v))
+                    selected.Sheet.Attributes[kv.Key] = v;
+            }
+        }
+
+        private void OnHostPressed()
+        {
+            var port = 12345;
+            var ok = _networkService.StartHost(port);
+            _chatController.SystemMessage(ok ? $"Hospedando na porta {port}." : "Falha ao iniciar host.");
+        }
+
+        private void OnJoinPressed()
+        {
+            _connectDialog?.PopupCenteredRatio();
+        }
+
+        private void ShowSheetSaveDialog()
+        {
+            var dlg = GetNodeOrNull<FileDialog>("CampaignSaveDialog");
+            if (dlg != null)
+            {
+                dlg.FileSelected -= OnSheetExportSelected;
+                dlg.FileSelected += OnSheetExportSelected;
+                dlg.PopupCenteredRatio();
+                return;
+            }
+
+            var fallback = new FileDialog();
+            fallback.Access = FileDialog.AccessEnum.Filesystem;
+            AddChild(fallback);
+            fallback.FileSelected += OnSheetExportSelected;
+            fallback.PopupCenteredRatio();
+        }
+
+        private void ShowSheetOpenDialog()
+        {
+            var dlg = GetNodeOrNull<FileDialog>("CampaignOpenDialog");
+            if (dlg != null)
+            {
+                dlg.FileSelected -= OnSheetImportSelected;
+                dlg.FileSelected += OnSheetImportSelected;
+                dlg.PopupCenteredRatio();
+                return;
+            }
+
+            var fallback = new FileDialog();
+            fallback.Access = FileDialog.AccessEnum.Filesystem;
+            AddChild(fallback);
+            fallback.FileSelected += OnSheetImportSelected;
+            fallback.PopupCenteredRatio();
+        }
+
+        private void OnSheetExportSelected(string path)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para exportar a ficha.");
+                return;
+            }
+
+            var actualPath = path.EndsWith(".json") ? path : path + ".json";
+            var dict = selected.Sheet.ToDictionary();
+            var plain = ConvertGodotToPlainObject(dict);
+            var json = System.Text.Json.JsonSerializer.Serialize(plain, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            try
+            {
+                System.IO.File.WriteAllText(System.IO.Path.GetFullPath(actualPath), json);
+                _chatController.SystemMessage($"Ficha de {selected.Name} exportada para: {actualPath}");
+            }
+            catch (Exception ex)
+            {
+                _chatController.SystemMessage($"Falha ao exportar ficha: {ex.Message}");
+            }
+        }
+
+        private void OnSheetImportSelected(string path)
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para importar a ficha.");
+                return;
+            }
+
+            try
+            {
+                var raw = System.IO.File.ReadAllText(System.IO.Path.GetFullPath(path));
+                var sheet = CharacterSheet.FromJson(raw);
+                selected.Sheet = sheet;
+                UpdateSelectionPanel(selected);
+                _chatController.SystemMessage($"Ficha importada para {selected.Name} a partir de: {System.IO.Path.GetFileName(path)}");
+            }
+            catch (Exception ex)
+            {
+                _chatController.SystemMessage($"Falha ao importar ficha: {ex.Message}");
+            }
+        }
+
+        private void OnApplySelectedClassPressed()
+        {
+            var selected = _mapController.SelectedToken;
+            if (selected == null)
+            {
+                _chatController.SystemMessage("Selecione um token para aplicar a classe.");
+                return;
+            }
+
+            if (_contentClassesList == null)
+            {
+                _chatController.SystemMessage("Lista de classes não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentClassesList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma classe na lista.");
+                return;
+            }
+
+            var className = _contentClassesList.GetItemMetadata(selectedItems[0]).ToString();
+            var classDef = FindClassByName(className);
+            if (classDef == null)
+            {
+                _chatController.SystemMessage("Classe selecionada não encontrada.");
+                return;
+            }
+
+            ApplyClassDefinition(selected, classDef);
+            UpdateSelectionPanel(selected);
+            _chatController.SystemMessage($"Classe '{classDef.Name}' aplicada a {selected.Name}.");
+        }
+
+        private void OnCastSelectedSpellPressed()
+        {
+            if (_contentSpellsList == null)
+            {
+                _chatController.SystemMessage("Lista de magias não está disponível.");
+                return;
+            }
+
+            var selectedItems = _contentSpellsList.GetSelectedItems();
+            if (selectedItems.Length == 0)
+            {
+                _chatController.SystemMessage("Selecione uma magia na lista.");
+                return;
+            }
+
+            var spellName = _contentSpellsList.GetItemMetadata(selectedItems[0]).ToString();
+            var spellDef = FindSpellByName(spellName);
+            if (spellDef == null)
+            {
+                _chatController.SystemMessage("Magia selecionada não encontrada.");
+                return;
+            }
+
+            var caster = _mapController.SelectedToken;
+            if (caster == null)
+            {
+                _chatController.SystemMessage("Selecione um token para lançar a magia.");
+                return;
+            }
+
+            if (caster.Sheet.PM < spellDef.CostPM)
+            {
+                _chatController.SystemMessage($"{caster.Name} não tem PM suficiente para lançar {spellDef.Name} ({spellDef.CostPM} PM).\nPM atuais: {caster.Sheet.PM}.");
+                return;
+            }
+
+            TokenData? target = null;
+            if (spellDef.TargetType.Equals("self", StringComparison.OrdinalIgnoreCase))
+            {
+                target = caster;
+            }
+            else
+            {
+                var targetText = _spellTargetInput?.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(targetText))
+                    target = FindTokenByName(targetText);
+                target ??= _mapController.SelectedToken != caster ? _mapController.SelectedToken : caster;
+            }
+
+            if (target == null)
+            {
+                _chatController.SystemMessage("Nenhum alvo disponível para a magia.");
+                return;
+            }
+
+            caster.Sheet.PM -= spellDef.CostPM;
+            var roll = _diceParser.Evaluate(spellDef.DamageExpression);
+            if (spellDef.IsHealing)
+            {
+                target.Sheet.HP += roll.Total;
+                _chatController.AddSystemMessage($"{caster.Name} lança {spellDef.Name} em {target.Name}: +{roll.Total} PV ({roll.Breakdown}). PV atuais: {target.Sheet.HP}.");
+            }
+            else
+            {
+                var damage = target.Sheet.GetDamageAfterTypeModifiers(roll.Total, string.Empty);
+                OnApplyDamage(target.Id, damage);
+                _chatController.AddSystemMessage($"{caster.Name} lança {spellDef.Name} em {target.Name}: {damage} dano ({roll.Total} base, {roll.Breakdown}).");
+            }
+
+            UpdateSelectionPanel(caster);
+            if (target.Id != caster.Id)
+                UpdateSelectionPanel(target);
+        }
+
         private void OnUiAddResistancePercent(string type, int percent)
         {
             var selected = _mapController.SelectedToken;
@@ -1608,5 +3014,32 @@ namespace TormentaVTT.UI
             defenseInput.Value = token.Sheet.Defense;
             initiativeInput.Value = token.Sheet.Initiative;
         }
+
+        private object ConvertGodotToPlainObject(object value)
+        {
+            if (value == null)
+                return null!;
+
+            if (value is Godot.Collections.Dictionary gdDict)
+            {
+                var result = new Dictionary<string, object?>();
+                foreach (var kv in gdDict)
+                {
+                    result[kv.Key.ToString()] = ConvertGodotToPlainObject(kv.Value);
+                }
+                return result;
+            }
+
+            if (value is Godot.Collections.Array gdArr)
+            {
+                var list = new List<object?>();
+                foreach (var v in gdArr)
+                    list.Add(ConvertGodotToPlainObject(v));
+                return list;
+            }
+
+            return value;
+        }
+
     }
 }

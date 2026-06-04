@@ -1,5 +1,6 @@
 using Godot;
 using System;
+using System.Text.RegularExpressions;
 using TormentaVTT.Models;
 using TormentaVTT.Services;
 
@@ -62,20 +63,10 @@ namespace TormentaVTT.UI
                 return;
             }
 
-            if (text.StartsWith("/init", StringComparison.OrdinalIgnoreCase))
-            {
-                SystemMessage("Use o botão de iniciativa ou selecione um token primeiro.");
-                return;
-            }
-
-            if (text.StartsWith("/heal", StringComparison.OrdinalIgnoreCase))
-            {
-                SystemMessage("Macro /heal ainda será expandida.");
-                return;
-            }
-
             AddMessage(new ChatMessage("Comando", text, ChatMessageType.System));
         }
+
+        private static readonly Regex InlineRollPattern = new(@"\[\[(.*?)\]\]", RegexOptions.Compiled);
 
         public void AddMessage(ChatMessage message)
         {
@@ -87,9 +78,30 @@ namespace TormentaVTT.UI
                 _ => string.Empty,
             };
 
-            var formatted = $"[b]{prefix}{message.Sender}[/b] ({message.TimeCode}): {message.Text}\n";
+            var text = ApplyInlineRolls(message.Text);
+            var formatted = $"[b]{prefix}{message.Sender}[/b] ({message.TimeCode}): {text}\n";
             _chatLog.Text += formatted;
             _chatLog.ScrollToLine(_chatLog.GetLineCount());
+        }
+
+        private string ApplyInlineRolls(string text)
+        {
+            return InlineRollPattern.Replace(text, match =>
+            {
+                var expression = match.Groups[1].Value.Trim();
+                if (string.IsNullOrWhiteSpace(expression))
+                    return match.Value;
+
+                try
+                {
+                    var result = _diceParser.Evaluate(expression);
+                    return $"{result.Total} ({result.Breakdown})";
+                }
+                catch
+                {
+                    return match.Value;
+                }
+            });
         }
 
         public void AddSystemMessage(string text)

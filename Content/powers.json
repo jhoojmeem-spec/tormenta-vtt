@@ -1,0 +1,18 @@
+[
+  {
+    "id": "ataque_poderoso",
+    "name": "Ataque Poderoso",
+    "type": "Combate",
+    "description": "Você pode despencar dados adicionais ao atacar.",
+    "prerequisites": ["Força 13"],
+    "effects": ["Rolar 1d6 adicional ao acertar com uma arma corpo a corpo"]
+  },
+  {
+    "id": "esquiva_total",
+    "name": "Esquiva Total",
+    "type": "Defesa",
+    "description": "Quando alvo de um ataque, pode usar uma reação para se mover até sua velocidade.",
+    "prerequisites": ["Destreza 13"],
+    "effects": ["Se não estava em combate, pode se mover até sua velocidade de movimento"]
+  }
+]

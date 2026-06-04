@@ -3,6 +3,7 @@ using Godot.Collections;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 
 namespace TormentaVTT.Models
 {
@@ -45,6 +46,7 @@ namespace TormentaVTT.Models
         {
             public string Name { get; set; } = string.Empty;
             public int RemainingTurns { get; set; } = -1;
+            public Godot.Collections.Dictionary<string, int> Modifiers { get; set; } = new();
 
             public Godot.Collections.Dictionary ToDictionary()
             {
@@ -52,6 +54,7 @@ namespace TormentaVTT.Models
                 {
                     ["name"] = Name,
                     ["remaining_turns"] = RemainingTurns
+                    , ["modifiers"] = Modifiers
                 };
             }
 
@@ -62,6 +65,17 @@ namespace TormentaVTT.Models
                     Name = data.GetValueOrDefault("name", string.Empty).ToString(),
                     RemainingTurns = data.TryGetValue("remaining_turns", out var remaining) ? remaining.AsInt32() : -1
                 };
+
+                if (data.TryGetValue("modifiers", out var modsRaw))
+                {
+                    var modsDict = modsRaw.AsGodotDictionary();
+                    entry.Modifiers = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var d in modsDict)
+                    {
+                        entry.Modifiers[d.Key.ToString()] = d.Value.AsInt32();
+                    }
+                }
+
                 return entry;
             }
 
@@ -238,6 +252,120 @@ namespace TormentaVTT.Models
             }
 
             return sheet;
+        }
+
+        public static CharacterSheet FromJson(string raw)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                var sheet = new CharacterSheet();
+
+                if (root.TryGetProperty("name", out var p)) sheet.Name = p.GetString() ?? sheet.Name;
+                if (root.TryGetProperty("hp", out var hp)) sheet.HP = hp.GetInt32();
+                if (root.TryGetProperty("pm", out var pm)) sheet.PM = pm.GetInt32();
+                if (root.TryGetProperty("defense", out var def)) sheet.Defense = def.GetInt32();
+                if (root.TryGetProperty("initiative", out var ini)) sheet.Initiative = ini.GetInt32();
+                if (root.TryGetProperty("level", out var lvl)) sheet.Level = lvl.GetInt32();
+                if (root.TryGetProperty("class", out var cls)) sheet.CharacterClass = cls.GetString() ?? sheet.CharacterClass;
+                if (root.TryGetProperty("race", out var rc)) sheet.Race = rc.GetString() ?? sheet.Race;
+
+                if (root.TryGetProperty("attributes", out var attr) && attr.ValueKind == JsonValueKind.Object)
+                {
+                    var dict = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in attr.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var ai))
+                            dict[prop.Name] = ai;
+                    }
+                    sheet.Attributes = dict;
+                }
+
+                if (root.TryGetProperty("skills", out var skills) && skills.ValueKind == JsonValueKind.Object)
+                {
+                    var dict = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in skills.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var si))
+                            dict[prop.Name] = si;
+                    }
+                    sheet.Skills = dict;
+                }
+
+                if (root.TryGetProperty("conditions", out var conds) && conds.ValueKind == JsonValueKind.Array)
+                {
+                    sheet.Conditions = new List<ConditionEntry>();
+                    foreach (var item in conds.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.Object)
+                        {
+                            var name = item.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                            var rem = item.TryGetProperty("remaining_turns", out var r) && r.TryGetInt32(out var rr) ? rr : -1;
+                            var entry = new ConditionEntry { Name = name, RemainingTurns = rem, Modifiers = new Godot.Collections.Dictionary<string, int>() };
+                            if (item.TryGetProperty("modifiers", out var mods) && mods.ValueKind == JsonValueKind.Object)
+                            {
+                                foreach (var m in mods.EnumerateObject())
+                                {
+                                    if (m.Value.ValueKind == JsonValueKind.Number && m.Value.TryGetInt32(out var mv))
+                                        entry.Modifiers[m.Name] = mv;
+                                }
+                            }
+                            sheet.Conditions.Add(entry);
+                        }
+                        else if (item.ValueKind == JsonValueKind.String)
+                        {
+                            sheet.Conditions.Add(new ConditionEntry { Name = item.GetString() ?? string.Empty });
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("resistances", out var res) && res.ValueKind == JsonValueKind.Object)
+                {
+                    sheet.Resistances = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in res.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var rv))
+                            sheet.Resistances[prop.Name.ToLowerInvariant()] = rv;
+                    }
+                }
+
+                if (root.TryGetProperty("vulnerabilities", out var vul) && vul.ValueKind == JsonValueKind.Object)
+                {
+                    sheet.Vulnerabilities = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in vul.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var vv))
+                            sheet.Vulnerabilities[prop.Name.ToLowerInvariant()] = vv;
+                    }
+                }
+
+                if (root.TryGetProperty("resistances_percent", out var resp) && resp.ValueKind == JsonValueKind.Object)
+                {
+                    sheet.ResistancesPercent = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in resp.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var rv))
+                            sheet.ResistancesPercent[prop.Name.ToLowerInvariant()] = rv;
+                    }
+                }
+
+                if (root.TryGetProperty("vulnerabilities_percent", out var vyp) && vyp.ValueKind == JsonValueKind.Object)
+                {
+                    sheet.VulnerabilitiesPercent = new Godot.Collections.Dictionary<string, int>();
+                    foreach (var prop in vyp.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out var vv))
+                            sheet.VulnerabilitiesPercent[prop.Name.ToLowerInvariant()] = vv;
+                    }
+                }
+
+                return sheet;
+            }
+            catch
+            {
+                return new CharacterSheet();
+            }
         }
 
         public Godot.Collections.Dictionary<string, int> GetAttributeTable()
@@ -448,8 +576,41 @@ namespace TormentaVTT.Models
             Conditions.Add(new ConditionEntry
             {
                 Name = normalized,
-                RemainingTurns = remainingTurns
+                RemainingTurns = remainingTurns,
+                Modifiers = new Godot.Collections.Dictionary<string, int>()
             });
+        }
+
+        public void AddConditionFromDefinition(TormentaVTT.Models.ConditionDefinition def, int remainingTurns = -1)
+        {
+            if (def == null)
+                return;
+
+            var normalized = def.Name.Trim();
+            var existing = Conditions.FirstOrDefault(c => string.Equals(c.Name.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
+            {
+                if (remainingTurns > 0)
+                    existing.RemainingTurns = remainingTurns;
+                return;
+            }
+
+            var entry = new ConditionEntry
+            {
+                Name = normalized,
+                RemainingTurns = remainingTurns,
+                Modifiers = new Godot.Collections.Dictionary<string, int>()
+            };
+
+            if (def.Modifiers != null)
+            {
+                foreach (var kv in def.Modifiers)
+                {
+                    entry.Modifiers[kv.Key] = kv.Value;
+                }
+            }
+
+            Conditions.Add(entry);
         }
 
         public void RemoveCondition(string conditionName)
@@ -482,12 +643,35 @@ namespace TormentaVTT.Models
         public int GetEffectiveDefense()
         {
             var defenseModifier = 0;
-            if (HasCondition("Atordoado") || HasCondition("Paralisado"))
-                defenseModifier -= 2;
-            if (HasCondition("Exausto"))
-                defenseModifier -= 1;
-            if (HasCondition("Ameaçado"))
-                defenseModifier += 2;
+            if (Conditions != null)
+            {
+                foreach (var cond in Conditions)
+                {
+                    if (cond?.Modifiers == null)
+                        continue;
+
+                    foreach (var kv in cond.Modifiers)
+                    {
+                        var key = kv.Key?.Trim().ToLowerInvariant() ?? string.Empty;
+                        if (key == "defense" || key == "def" || key == "defesa")
+                        {
+                            defenseModifier += kv.Value;
+                        }
+                    }
+                }
+            }
+
+            // Backwards-compatibility fallback
+            if (defenseModifier == 0)
+            {
+                if (HasCondition("Atordoado") || HasCondition("Paralisado"))
+                    defenseModifier -= 2;
+                if (HasCondition("Exausto"))
+                    defenseModifier -= 1;
+                if (HasCondition("Ameaçado"))
+                    defenseModifier += 2;
+            }
+
             return Defense + defenseModifier;
         }
 

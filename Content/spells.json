@@ -1,0 +1,28 @@
+[
+  {
+    "id": "cortar_fera",
+    "name": "Cortar Fera",
+    "school": "Evocação",
+    "circle": 1,
+    "range": "9m",
+    "duration": "Instantâneo",
+    "costPM": 2,
+    "effectType": "damage",
+    "damageExpression": "1d8+2",
+    "targetType": "enemy",
+    "description": "Um ataque de energia pura contra uma criatura, causando dano mágico."
+  },
+  {
+    "id": "curar_ferimentos",
+    "name": "Curar Ferimentos",
+    "school": "Evocação",
+    "circle": 1,
+    "range": "Toque",
+    "duration": "Instantâneo",
+    "costPM": 3,
+    "effectType": "heal",
+    "damageExpression": "1d6+2",
+    "targetType": "ally",
+    "description": "Restaura PV de um aliado ao toque."
+  }
+]

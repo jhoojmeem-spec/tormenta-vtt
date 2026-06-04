@@ -12,10 +12,10 @@ Construir um VTT local leve e rápido baseado em Godot 4 + C#, com foco em uso p
 - `tormenta-vtt.csproj` — projeto C# para scripts Godot.
 - `Scenes/` — cenas do jogo e da interface.
 - `Scripts/` — lógica de domínio, UI, serviços, importadores e regras.
+- `Scripts/Importers/` — pontos de entrada para importação de JSON/PDF.
+- `Scripts/Parsers/` — parser de documentos e dados.
 - `Data/` — dados de exemplo e persistência local.
-- `Content/` — base para conteúdo Tormenta20 futuro.
-- `Importers/` — pontos de entrada para importação de JSON/PDF.
-- `Parsers/` — parser de documentos e dados.
+- `Content/` — base de conteúdo Tormenta20 (classes, condições, magias).
 - `Assets/` — futuros recursos gráficos.
 
 ## Como abrir
