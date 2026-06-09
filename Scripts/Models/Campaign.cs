@@ -20,6 +20,13 @@ namespace TormentaVTT.Models
         public System.Collections.Generic.Dictionary<string, int> CombatOrderRolls { get; set; } = new();
         public int CombatCurrentIndex { get; set; } = -1;
 
+        // ── VTT online additions ──────────────────────────────────────────────
+        public List<JournalEntry> Journals  { get; set; } = new();
+        public List<Handout>      Handouts  { get; set; } = new();
+        /// <summary>Grid cells revealed by GM through the fog-of-war tool, stored as "x,y" strings.</summary>
+        public List<string> FogRevealedCells { get; set; } = new();
+        public bool FogEnabled { get; set; } = false;
+
         public static Campaign CreateDefault()
         {
             return new Campaign();
@@ -51,6 +58,15 @@ namespace TormentaVTT.Models
                 combatRollsDict[rollEntry.Key] = rollEntry.Value;
             }
 
+            var journalsArray = new Godot.Collections.Array();
+            foreach (var j in Journals) journalsArray.Add(j.ToDictionary());
+
+            var handoutsArray = new Godot.Collections.Array();
+            foreach (var h in Handouts) handoutsArray.Add(h.ToDictionary());
+
+            var fogArray = new Godot.Collections.Array();
+            foreach (var cell in FogRevealedCells) fogArray.Add(cell);
+
             return new Godot.Collections.Dictionary
             {
                 ["name"] = Name,
@@ -64,7 +80,11 @@ namespace TormentaVTT.Models
                 ["combat_active"] = CombatActive,
                 ["combat_order"] = combatOrderArray,
                 ["combat_rolls"] = combatRollsDict,
-                ["combat_current_index"] = CombatCurrentIndex
+                ["combat_current_index"] = CombatCurrentIndex,
+                ["journals"] = journalsArray,
+                ["handouts"] = handoutsArray,
+                ["fog_cells"] = fogArray,
+                ["fog_enabled"] = FogEnabled
             };
         }
 
@@ -139,6 +159,36 @@ namespace TormentaVTT.Models
             {
                 campaign.CombatCurrentIndex = currentRaw.AsInt32();
             }
+
+            if (data.TryGetValue("journals", out var journalsRaw))
+            {
+                campaign.Journals = new List<JournalEntry>();
+                foreach (var item in journalsRaw.AsGodotArray())
+                {
+                    var d2 = item.AsGodotDictionary();
+                    if (d2.Count > 0) campaign.Journals.Add(JournalEntry.FromDictionary(d2));
+                }
+            }
+
+            if (data.TryGetValue("handouts", out var handoutsRaw))
+            {
+                campaign.Handouts = new List<Handout>();
+                foreach (var item in handoutsRaw.AsGodotArray())
+                {
+                    var d2 = item.AsGodotDictionary();
+                    if (d2.Count > 0) campaign.Handouts.Add(Handout.FromDictionary(d2));
+                }
+            }
+
+            if (data.TryGetValue("fog_cells", out var fogRaw))
+            {
+                campaign.FogRevealedCells = new List<string>();
+                foreach (var item in fogRaw.AsGodotArray())
+                    campaign.FogRevealedCells.Add(item.ToString());
+            }
+
+            if (data.TryGetValue("fog_enabled", out var fogEnabledRaw))
+                campaign.FogEnabled = fogEnabledRaw.AsBool();
 
             return campaign;
         }

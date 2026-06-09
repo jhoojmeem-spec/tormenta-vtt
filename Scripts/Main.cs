@@ -1,9 +1,11 @@
 using Godot;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using TormentaVTT.Importers;
 using TormentaVTT.Models;
+using TormentaVTT.Network;
 using TormentaVTT.Services;
 
 namespace TormentaVTT.UI
@@ -21,6 +23,36 @@ namespace TormentaVTT.UI
         private PdfImportService _pdfImportService = new();
         private TextContentParser _textContentParser = new();
         private DocumentImporter _documentImporter = new();
+
+        // ── Multiplayer / session ─────────────────────────────────────────────
+        private SyncService _syncService = null!;
+        private readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+        private string _localPlayerName = "Mestre";
+        private RoleType _localRole = RoleType.GM;
+        private readonly List<PlayerSession> _connectedPlayers = new();
+        private bool _isSyncing = false; // guard: don't re-broadcast incoming changes
+
+        // ── Session / network UI ──────────────────────────────────────────────
+        private Label? _sessionStatusLabel;
+        private Label? _sessionPlayersLabel;
+        private LineEdit? _playerNameInput;
+
+        // ── Journal / Handout UI ──────────────────────────────────────────────
+        private Window? _journalWindow;
+        private ItemList? _journalList;
+        private TextEdit? _journalContent;
+        private LineEdit? _journalTitle;
+        private OptionButton? _journalCategory;
+        private CheckButton? _journalVisibleToggle;
+        private int _selectedJournalIndex = -1;
+
+        // ── Fog of war UI ─────────────────────────────────────────────────────
+        private Button? _fogToggleButton;
+        private Button? _fogRevealButton;
+        private Button? _fogHideButton;
+        private Button? _fogRevealAllButton;
+        private Button? _fogHideAllButton;
+        private bool _fogToolActive = false;
 
         private readonly (string NodeName, string AttributeName)[] _attributeInputs = new[]
         {
@@ -132,24 +164,7 @@ namespace TormentaVTT.UI
             GetNode<Button>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions/AttackButton").Pressed += OnAttackButtonPressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions/RerollButton").Pressed += OnRerollButtonPressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeActions/EndCombatButton").Pressed += OnEndCombatPressed;
-            _mapController.TokenAdded += token =>
-            {
-                UpdateAssetList();
-                if (_combatController.InCombat)
-                {
-                    _combatController.AddTokenToOrder(token, true);
-                    UpdateInitiativePanel();
-                }
-            };
-            _mapController.TokenRemoved += token =>
-            {
-                UpdateAssetList();
-                if (_combatController.InCombat)
-                {
-                    _combatController.RemoveTokenFromOrder(token.Id);
-                    UpdateInitiativePanel();
-                }
-            };
+            // TokenAdded/TokenRemoved wiring is in WireSyncOutbound() (called later in _Ready)
             _chatController.SystemMessage("Bem-vindo ao Tormenta VTT. Use /roll para rolar dados.");
 
             LoadCampaign(_currentCampaign);
@@ -159,7 +174,26 @@ namespace TormentaVTT.UI
             CreateContentBrowserUi();
             CreateSheetEditorUi();
             CreateNetworkUi();
+
+            // ── Multiplayer setup ─────────────────────────────────────────────
+            _syncService = new SyncService(_networkService, _mainThreadQueue);
+            WireSyncOutbound();
+            WireSyncInbound();
+            CreateFogUi();
+            CreateJournalUi();
+            CreateSessionUi();
+
             _chatController.SystemMessage($"Conteúdo carregado: {_contentService.ClassCount} classes, {_contentService.RaceCount} raças, {_contentService.PowerCount} poderes, {_contentService.SpellCount} magias, {_contentService.ConditionCount} condições, {_contentService.ThreatCount} ameaças.");
+        }
+
+        // ── Main thread queue (pumped every frame for thread-safe network ops) ──
+        public override void _Process(double delta)
+        {
+            while (_mainThreadQueue.TryDequeue(out var action))
+            {
+                try { action(); }
+                catch (Exception e) { GD.PrintErr($"[Sync] {e.Message}"); }
+            }
         }
 
         private void OnNewCampaignPressed()
@@ -1235,6 +1269,7 @@ namespace TormentaVTT.UI
             {
                 _combatController.EndCombat();
                 UpdateInitiativePanel();
+                if (_networkService.IsConnected && !_isSyncing) _syncService.SyncCombatEnded();
                 return;
             }
 
@@ -1249,18 +1284,21 @@ namespace TormentaVTT.UI
             }
             _chatController.AddSystemMessage(sb.ToString());
             UpdateInitiativePanel();
+            if (_networkService.IsConnected && !_isSyncing) SyncCombatStarted();
         }
 
         private void OnNextTurnPressed()
         {
             _combatController.AdvanceTurn();
             UpdateInitiativePanel();
+            if (_networkService.IsConnected && !_isSyncing) SyncCombatAdvanced();
         }
 
         private void OnPrevTurnPressed()
         {
             _combatController.RetreatTurn();
             UpdateInitiativePanel();
+            if (_networkService.IsConnected && !_isSyncing) SyncCombatAdvanced();
         }
 
         private void UpdateInitiativePanel()
@@ -1643,6 +1681,9 @@ namespace TormentaVTT.UI
             if (token.Sheet.HP <= 0)
             {
                 _chatController.SystemMessage($"{token.Name} sofreu {amount} de dano e morreu.");
+                // Sync removal before removing
+                if (_networkService.IsConnected && !_isSyncing)
+                    _syncService.SyncTokenRemoved(token.Id);
                 _currentCampaign.Tokens.Remove(token);
                 _mapController.RemoveToken(token);
                 _combatController.RemoveTokenFromOrder(token.Id);
@@ -1653,6 +1694,9 @@ namespace TormentaVTT.UI
             {
                 _chatController.SystemMessage($"{token.Name} sofreu {amount} de dano (PV restantes: {token.Sheet.HP}).");
                 UpdateSelectionPanel(_mapController.SelectedToken);
+                // Sync HP change
+                if (_networkService.IsConnected && !_isSyncing)
+                    _syncService.SyncDamage(token.Id, token.Sheet.HP);
             }
 
             UpdateInitiativePanel();
@@ -2576,34 +2620,51 @@ namespace TormentaVTT.UI
 
         private void CreateNetworkUi()
         {
-            _connectDialog = new AcceptDialog { Title = "Conectar ao host" };
+            // Player name field added to toolbar
+            var topButtons = GetNode<HBoxContainer>("Toolbar/TopButtons");
+            _playerNameInput = new LineEdit
+            {
+                PlaceholderText = "Seu nome",
+                Text = "Mestre",
+                CustomMinimumSize = new Vector2(110, 0)
+            };
+            topButtons.AddChild(_playerNameInput);
+
+            // Connect dialog
+            _connectDialog = new AcceptDialog { Title = "Conectar a uma Mesa" };
             var v = new VBoxContainer();
-            _connectHostInput = new LineEdit { PlaceholderText = "host (ex: 127.0.0.1)" };
-            _connectPortInput = new LineEdit { PlaceholderText = "porta (ex: 12345)" };
-            v.AddChild(new Label { Text = "Host" });
+            _connectHostInput = new LineEdit { PlaceholderText = "IP do host (ex: 192.168.1.10)" };
+            _connectPortInput = new LineEdit { PlaceholderText = "Porta (padrão: 12345)", Text = "12345" };
+            v.AddChild(new Label { Text = "Nome do jogador:" });
+            v.AddChild(new Label { Text = "(use o campo 'Seu nome' da toolbar)" });
+            v.AddChild(new Label { Text = "IP do host:" });
             v.AddChild(_connectHostInput);
-            v.AddChild(new Label { Text = "Porta" });
+            v.AddChild(new Label { Text = "Porta:" });
             v.AddChild(_connectPortInput);
             _connectDialog.AddChild(v);
             AddChild(_connectDialog);
+
             _connectDialog.Confirmed += () =>
             {
-                var host = _connectHostInput?.Text ?? "127.0.0.1";
-                var portText = _connectPortInput?.Text ?? "12345";
+                var host     = _connectHostInput?.Text.Trim() ?? "127.0.0.1";
+                var portText = _connectPortInput?.Text.Trim() ?? "12345";
                 if (!int.TryParse(portText, out var port)) port = 12345;
+
+                var name = _playerNameInput?.Text.Trim();
+                if (!string.IsNullOrEmpty(name)) _localPlayerName = name;
+                _localRole = RoleType.Player;
+
                 var ok = _networkService.Join(host, port);
-                if (ok)
+                if (!ok)
                 {
-                    _chatController.SystemMessage($"Conectado a {host}:{port}");
-                    _networkService.MessageReceived += msg =>
-                    {
-                        _chatController.AddSystemMessage($"[rede] {msg}");
-                    };
+                    _chatController.SystemMessage($"Falha ao conectar a {host}:{port}.");
+                    return;
                 }
-                else
-                {
-                    _chatController.SystemMessage($"Falha ao conectar a {host}:{port}");
-                }
+
+                _chatController.SystemMessage($"Conectando a {host}:{port} como '{_localPlayerName}'...");
+                _mapController.ApplyVisibilityMode(false); // player view: no GM tokens
+                // Introduce ourselves and request full state
+                _syncService.RequestFullState(_localPlayerName);
             };
         }
 
@@ -2697,8 +2758,36 @@ namespace TormentaVTT.UI
         private void OnHostPressed()
         {
             var port = 12345;
+            var name = _playerNameInput?.Text.Trim();
+            if (!string.IsNullOrEmpty(name)) _localPlayerName = name;
+            _localRole = RoleType.GM;
+
             var ok = _networkService.StartHost(port);
-            _chatController.SystemMessage(ok ? $"Hospedando na porta {port}." : "Falha ao iniciar host.");
+            if (!ok)
+            {
+                _chatController.SystemMessage("Falha ao iniciar host. Porta em uso?");
+                return;
+            }
+
+            // Hook host events
+            _networkService.ClientConnected    += OnClientConnected;
+            _networkService.ClientDisconnected += OnClientDisconnected;
+
+            _mapController.ApplyVisibilityMode(true);
+            _chatController.SystemMessage($"✅ Hospedando na porta {port} como '{_localPlayerName}'. Passe seu IP para os jogadores.");
+            UpdateSessionUI();
+
+            // Add GM as first player
+            var gmSession = new PlayerSession
+            {
+                Id          = _networkService.LocalId,
+                DisplayName = _localPlayerName,
+                Role        = RoleType.GM,
+                IsConnected = true
+            };
+            _connectedPlayers.Clear();
+            _connectedPlayers.Add(gmSession);
+            UpdateSessionUI();
         }
 
         private void OnJoinPressed()
@@ -3039,6 +3128,678 @@ namespace TormentaVTT.UI
             }
 
             return value;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // MULTIPLAYER — Outbound sync wiring
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void WireSyncOutbound()
+        {
+            // Token dropped (final position after drag)
+            _mapController.TokenDropped += token =>
+            {
+                if (!_networkService.IsConnected || _isSyncing) return;
+                if (!CanControlToken(token)) return;
+                _syncService.SyncTokenMoved(token.Id, token.Position.X, token.Position.Y);
+            };
+
+            // Token added to map
+            _mapController.TokenAdded += token =>
+            {
+                UpdateAssetList();
+                if (_combatController.InCombat)
+                {
+                    _combatController.AddTokenToOrder(token, true);
+                    UpdateInitiativePanel();
+                }
+                if (!_networkService.IsConnected || _isSyncing || token.IsGMOnly) return;
+                // Serialize token dict to JSON for sync
+                var dict  = token.ToDictionary();
+                var plain = ConvertGodotToPlainObject(dict);
+                var json  = System.Text.Json.JsonSerializer.Serialize(plain);
+                _syncService.SyncTokenSpawned(json);
+            };
+
+            // Token removed from map
+            _mapController.TokenRemoved += token =>
+            {
+                UpdateAssetList();
+                if (_combatController.InCombat)
+                {
+                    _combatController.RemoveTokenFromOrder(token.Id);
+                    UpdateInitiativePanel();
+                }
+                if (!_networkService.IsConnected || _isSyncing) return;
+                _syncService.SyncTokenRemoved(token.Id);
+            };
+
+            // Fog changed
+            _mapController.FogChanged += (cells, reveal) =>
+            {
+                // Update campaign state
+                if (reveal) _currentCampaign.FogRevealedCells.AddRange(
+                    cells.Where(c => !_currentCampaign.FogRevealedCells.Contains(c)));
+                else         _currentCampaign.FogRevealedCells.RemoveAll(cells.Contains);
+
+                if (!_networkService.IsConnected || _isSyncing) return;
+                _syncService.SyncFogUpdate(cells, reveal);
+            };
+
+            // Chat message sent by local user
+            _chatController.MessageSent += msg =>
+            {
+                if (!_networkService.IsConnected) return;
+                _syncService.SyncChat(msg.Sender, msg.Text, msg.Type.ToString());
+            };
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // MULTIPLAYER — Inbound sync wiring
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void WireSyncInbound()
+        {
+            // ── Chat ────────────────────────────────────────────────────────────
+            _syncService.RemoteChatReceived += (sender, text, type) =>
+            {
+                _isSyncing = true;
+                _chatController.AddSystemMessage($"[{sender}] {text}");
+                _isSyncing = false;
+            };
+
+            // ── Tokens ──────────────────────────────────────────────────────────
+            _syncService.RemoteTokenMoved += (id, x, y) =>
+            {
+                _isSyncing = true;
+                _mapController.RemoteUpdateTokenPosition(id, x, y);
+                var token = _currentCampaign.Tokens.FirstOrDefault(t => t.Id == id);
+                if (token != null) token.Position = new Vector2(x, y);
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteTokenSpawned += tokenJson =>
+            {
+                _isSyncing = true;
+                try
+                {
+                    var raw  = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(tokenJson);
+                    if (raw == null) return;
+                    var gd   = ConvertPlainToGodotDict(raw);
+                    var token= TokenData.FromDictionary(gd);
+                    token.Position = _mapController.GetViewportCenterMapPosition();
+                    _currentCampaign.Tokens.Add(token);
+                    _mapController.AddToken(token);
+                    _chatController.SystemMessage($"Token '{token.Name}' adicionado remotamente.");
+                }
+                catch { }
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteTokenRemoved += id =>
+            {
+                _isSyncing = true;
+                var token = _currentCampaign.Tokens.FirstOrDefault(t => t.Id == id);
+                if (token != null)
+                {
+                    _currentCampaign.Tokens.Remove(token);
+                    _mapController.RemoveToken(token);
+                }
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteTokenStats += (id, hp, pm) =>
+            {
+                _isSyncing = true;
+                var token = _currentCampaign.Tokens.FirstOrDefault(t => t.Id == id);
+                if (token != null)
+                {
+                    token.Sheet.HP = hp;
+                    token.Sheet.PM = pm;
+                    _mapController.RemoteUpdateTokenStats(id, hp, pm);
+                    if (_mapController.SelectedToken?.Id == id) UpdateSelectionPanel(token);
+                }
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteDamageApplied += (id, newHP) =>
+            {
+                _isSyncing = true;
+                var token = _currentCampaign.Tokens.FirstOrDefault(t => t.Id == id);
+                if (token != null)
+                {
+                    token.Sheet.HP = newHP;
+                    if (_mapController.SelectedToken?.Id == id) UpdateSelectionPanel(token);
+                    _chatController.SystemMessage($"{token.Name}: PV → {newHP}");
+                }
+                _isSyncing = false;
+            };
+
+            // ── Combat ──────────────────────────────────────────────────────────
+            _syncService.RemoteCombatStarted += (orderIds, rolls, current) =>
+            {
+                _isSyncing = true;
+                _combatController.LoadCombatState(
+                    _currentCampaign.Tokens, orderIds, rolls, current, true);
+                UpdateInitiativePanel();
+                _chatController.SystemMessage("⚔️ Combate iniciado remotamente.");
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteCombatAdvanced += current =>
+            {
+                _isSyncing = true;
+                // Rebuild local order to match host's current index
+                UpdateInitiativePanel();
+                _chatController.SystemMessage("▶ Turno avançado pelo GM.");
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteCombatEnded += () =>
+            {
+                _isSyncing = true;
+                _combatController.EndCombat();
+                UpdateInitiativePanel();
+                _chatController.SystemMessage("🏁 Combate encerrado.");
+                _isSyncing = false;
+            };
+
+            // ── Fog ─────────────────────────────────────────────────────────────
+            _syncService.RemoteFogUpdate += (cells, reveal) =>
+            {
+                _isSyncing = true;
+                _mapController.FogLayer.ApplyCells(cells, reveal);
+                if (reveal) _currentCampaign.FogRevealedCells.AddRange(
+                    cells.Where(c => !_currentCampaign.FogRevealedCells.Contains(c)));
+                else         _currentCampaign.FogRevealedCells.RemoveAll(cells.Contains);
+                _isSyncing = false;
+            };
+
+            _syncService.RemoteFogReset += cells =>
+            {
+                _isSyncing = true;
+                _mapController.FogLayer.SetFullState(cells);
+                _currentCampaign.FogRevealedCells = new List<string>(cells);
+                _isSyncing = false;
+            };
+
+            // ── Journals shared ─────────────────────────────────────────────────
+            _syncService.RemoteJournalShared += (id, title, content) =>
+            {
+                _isSyncing = true;
+                _chatController.SystemMessage($"📜 Handout compartilhado: '{title}'");
+                // Add to local journal list as player-visible entry
+                var existing = _currentCampaign.Journals.FirstOrDefault(j => j.Id == id);
+                if (existing != null) { existing.Content = content; existing.Title = title; }
+                else _currentCampaign.Journals.Add(new JournalEntry
+                {
+                    Id = id, Title = title, Content = content,
+                    IsVisibleToPlayers = true, Category = "Handout"
+                });
+                RefreshJournalList();
+                _isSyncing = false;
+            };
+
+            // ── Full state sync (client receives on join) ─────────────────────
+            _syncService.RemoteRoleAssigned += (role, ownedCsv, myId) =>
+            {
+                _localRole = role == "GM" ? RoleType.GM : RoleType.Player;
+                _mapController.ApplyVisibilityMode(_localRole == RoleType.GM);
+                var ownedIds = ownedCsv.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+                var me = new PlayerSession
+                {
+                    Id = myId, DisplayName = _localPlayerName,
+                    Role = _localRole, OwnedTokenIds = ownedIds
+                };
+                if (!_connectedPlayers.Any(p => p.Id == myId)) _connectedPlayers.Add(me);
+                UpdateSessionUI();
+                _chatController.SystemMessage($"Entrou como: {_localRole} — {_localPlayerName}");
+            };
+
+            _syncService.RemoteFullStateSync += campaignJson =>
+            {
+                _isSyncing = true;
+                try
+                {
+                    var parse = Godot.Json.ParseString(campaignJson);
+                    if (parse.VariantType == Variant.Type.Dictionary)
+                    {
+                        var campaign = Campaign.FromDictionary(parse.AsGodotDictionary());
+                        // Players don't see GM-only tokens — already handled by AddToken
+                        LoadCampaign(campaign);
+                        _chatController.SystemMessage("✅ Estado da mesa sincronizado.");
+                    }
+                }
+                catch (Exception e) { GD.PrintErr($"[FullStateSync] {e.Message}"); }
+                _isSyncing = false;
+            };
+
+            // ── Session events ────────────────────────────────────────────────
+            _syncService.RemotePlayerJoined += (id, name, role) =>
+            {
+                if (_connectedPlayers.Any(p => p.Id == id)) return;
+                var session = new PlayerSession
+                {
+                    Id = id, DisplayName = name, IsConnected = true,
+                    Role = role == "GM" ? RoleType.GM : RoleType.Player
+                };
+                _connectedPlayers.Add(session);
+                UpdateSessionUI();
+                _chatController.SystemMessage($"🎲 {name} entrou na mesa como {role}.");
+
+                // Host sends full state to the new joiner
+                if (_networkService.IsHost)
+                {
+                    var dict  = _currentCampaign.ToDictionary();
+                    var json  = Godot.Json.Stringify(dict);
+                    _syncService.SendFullStateTo(id, json, RoleType.Player, id, new List<string>());
+
+                    // Announce to all that someone joined
+                    var joinMsg = NetMsg.Encode(NetMsgType.PlayerJoined, _networkService.LocalId,
+                        new PlayerJoinedPayload { Id = id, Name = name, Role = role });
+                    _ = _networkService.BroadcastAsync(joinMsg);
+                }
+            };
+
+            _syncService.RemotePlayerLeft += id =>
+            {
+                var session = _connectedPlayers.FirstOrDefault(p => p.Id == id);
+                if (session != null)
+                {
+                    session.IsConnected = false;
+                    _chatController.SystemMessage($"👋 {session.DisplayName} saiu da mesa.");
+                    _connectedPlayers.Remove(session);
+                    UpdateSessionUI();
+                }
+            };
+
+            // Host-side: wire NetworkService client events
+            _networkService.ClientDisconnected += clientId =>
+            {
+                _mainThreadQueue.Enqueue(() =>
+                {
+                    var session = _connectedPlayers.FirstOrDefault(p => p.Id == clientId);
+                    if (session != null)
+                    {
+                        _chatController.SystemMessage($"👋 {session.DisplayName} desconectou.");
+                        _connectedPlayers.Remove(session);
+                        UpdateSessionUI();
+                    }
+                    // Broadcast disconnect to others
+                    if (_networkService.IsHost)
+                    {
+                        var msg = NetMsg.Encode(NetMsgType.PlayerLeft, _networkService.LocalId,
+                            new PlayerLeftPayload { Id = clientId });
+                        _ = _networkService.BroadcastAsync(msg);
+                    }
+                });
+            };
+        }
+
+        // Host client connection handler (fires on background thread → queued)
+        private void OnClientConnected(string clientId)
+        {
+            _mainThreadQueue.Enqueue(() =>
+            {
+                _chatController.SystemMessage($"⏳ Novo jogador conectando ({clientId})...");
+            });
+        }
+
+        private void OnClientDisconnected(string clientId)
+        {
+            // Already handled in WireSyncInbound
+        }
+
+        // ── Sync helpers ──────────────────────────────────────────────────────
+        private bool CanControlToken(TokenData token)
+        {
+            if (_localRole == RoleType.GM) return true;
+            var me = _connectedPlayers.FirstOrDefault(p => p.Id == _networkService.LocalId);
+            return me?.CanControlToken(token.Id) ?? false;
+        }
+
+        /// <summary>Syncs token stats after any stats change on the host side.</summary>
+        private void SyncTokenStatsIfConnected(TokenData token)
+        {
+            if (!_networkService.IsConnected || _isSyncing) return;
+            _syncService.SyncTokenStats(token.Id, token.Sheet.HP, token.Sheet.PM);
+        }
+
+        // Also sync combat events — wire into existing handlers
+        private void SyncCombatStarted()
+        {
+            if (!_networkService.IsConnected) return;
+            _syncService.SyncCombatStarted(
+                _combatController.GetOrderIds(),
+                _combatController.GetOrderRolls(),
+                _combatController.GetCurrentIndex());
+        }
+
+        private void SyncCombatAdvanced()
+        {
+            if (!_networkService.IsConnected) return;
+            _syncService.SyncCombatAdvanced(_combatController.GetCurrentIndex());
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // FOG OF WAR UI
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void CreateFogUi()
+        {
+            var toolbar = GetNode<HBoxContainer>("Toolbar/TopButtons");
+
+            var sep = new VSeparator();
+            toolbar.AddChild(sep);
+
+            _fogToggleButton = new Button { Text = "Névoa OFF", ToggleMode = true };
+            _fogRevealButton = new Button { Text = "🔦 Revelar", ToggleMode = true };
+            _fogHideButton   = new Button { Text = "🌑 Esconder", ToggleMode = true };
+            _fogRevealAllButton = new Button { Text = "Revelar Tudo" };
+            _fogHideAllButton   = new Button { Text = "Esconder Tudo" };
+
+            toolbar.AddChild(_fogToggleButton);
+            toolbar.AddChild(_fogRevealButton);
+            toolbar.AddChild(_fogHideButton);
+            toolbar.AddChild(_fogRevealAllButton);
+            toolbar.AddChild(_fogHideAllButton);
+
+            _fogToggleButton.Toggled += on =>
+            {
+                _currentCampaign.FogEnabled = on;
+                _mapController.SetFogEnabled(on);
+                _fogToggleButton.Text = on ? "Névoa ON" : "Névoa OFF";
+                _chatController.SystemMessage($"Névoa de guerra: {(on ? "ativada" : "desativada")}.");
+            };
+
+            _fogRevealButton.Toggled += on =>
+            {
+                if (on) _fogHideButton!.ButtonPressed = false;
+                _fogToolActive = on;
+                _mapController.SetFogToolActive(on, true);
+                if (on) _chatController.SystemMessage("🔦 Ferramenta: REVELAR (clique no mapa).");
+            };
+
+            _fogHideButton.Toggled += on =>
+            {
+                if (on) _fogRevealButton!.ButtonPressed = false;
+                _fogToolActive = on;
+                _mapController.SetFogToolActive(on, false);
+                if (on) _chatController.SystemMessage("🌑 Ferramenta: ESCONDER (clique no mapa).");
+            };
+
+            _fogRevealAllButton.Pressed += () =>
+            {
+                _mapController.FogLayer.RevealAll();
+                _currentCampaign.FogRevealedCells = _mapController.FogLayer.GetRevealedCells();
+                if (_networkService.IsConnected)
+                    _syncService.SyncFogReset(_currentCampaign.FogRevealedCells);
+                _chatController.SystemMessage("Névoa removida de todo o mapa.");
+            };
+
+            _fogHideAllButton.Pressed += () =>
+            {
+                _mapController.FogLayer.HideAll();
+                _currentCampaign.FogRevealedCells.Clear();
+                if (_networkService.IsConnected)
+                    _syncService.SyncFogReset(new List<string>());
+                _chatController.SystemMessage("Névoa aplicada a todo o mapa.");
+            };
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // SESSION PANEL
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void CreateSessionUi()
+        {
+            var sidebar = GetNode<VBoxContainer>("SidebarPanel/SidebarVBox");
+
+            var sep = new HSeparator();
+            sidebar.AddChild(sep);
+
+            var title = new Label { Text = "━ Sessão Online ━" };
+            sidebar.AddChild(title);
+
+            _sessionStatusLabel = new Label { Text = "Offline (local)", AutowrapMode = TextServer.AutowrapMode.Word };
+            sidebar.AddChild(_sessionStatusLabel);
+
+            _sessionPlayersLabel = new Label
+            {
+                Text = "",
+                AutowrapMode = TextServer.AutowrapMode.Word,
+                CustomMinimumSize = new Vector2(0, 60)
+            };
+            sidebar.AddChild(_sessionPlayersLabel);
+
+            var disconnectBtn = new Button { Text = "Desconectar" };
+            disconnectBtn.Pressed += () =>
+            {
+                _networkService.Stop();
+                _connectedPlayers.Clear();
+                UpdateSessionUI();
+                _chatController.SystemMessage("Desconectado da sessão.");
+            };
+            sidebar.AddChild(disconnectBtn);
+        }
+
+        private void UpdateSessionUI()
+        {
+            if (_sessionStatusLabel == null) return;
+
+            if (!_networkService.IsConnected)
+            {
+                _sessionStatusLabel.Text = "Offline (local)";
+                _sessionPlayersLabel!.Text = "";
+                return;
+            }
+
+            if (_networkService.IsHost)
+                _sessionStatusLabel.Text = $"🟢 Host ativo — {_networkService.ClientCount} jogador(es)";
+            else
+                _sessionStatusLabel.Text = "🟢 Conectado como jogador";
+
+            var lines = _connectedPlayers
+                .Select(p => $"  {(p.IsGM ? "👑" : "🎲")} {p.DisplayName}{(p.IsConnected ? "" : " (off)"})")
+                .ToList();
+            _sessionPlayersLabel!.Text = string.Join("\n", lines);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // JOURNAL / HANDOUT UI
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void CreateJournalUi()
+        {
+            // Add Journal button to toolbar
+            var toolbar = GetNode<HBoxContainer>("Toolbar/TopButtons");
+            var journalBtn = new Button { Text = "📔 Diário" };
+            toolbar.AddChild(journalBtn);
+            journalBtn.Pressed += OpenJournalWindow;
+
+            // Build the journal window
+            _journalWindow = new Window
+            {
+                Title = "Diário & Handouts",
+                Size  = new Vector2I(700, 500),
+                Visible = false
+            };
+            AddChild(_journalWindow);
+
+            var root = new HBoxContainer();
+            root.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect, margin: 8);
+            _journalWindow.AddChild(root);
+
+            // Left panel — list + controls
+            var leftVBox = new VBoxContainer { CustomMinimumSize = new Vector2(200, 0) };
+            root.AddChild(leftVBox);
+
+            leftVBox.AddChild(new Label { Text = "Anotações" });
+
+            _journalList = new ItemList { CustomMinimumSize = new Vector2(0, 320), SizeFlagsVertical = (int)Control.SizeFlags.ExpandFill };
+            leftVBox.AddChild(_journalList);
+
+            var listBtns = new HBoxContainer();
+            var newBtn  = new Button { Text = "Novo", SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            var delBtn  = new Button { Text = "Del"  };
+            listBtns.AddChild(newBtn);
+            listBtns.AddChild(delBtn);
+            leftVBox.AddChild(listBtns);
+
+            var shareBtn = new Button { Text = "📤 Compartilhar" };
+            leftVBox.AddChild(shareBtn);
+
+            // Right panel — editor
+            var rightVBox = new VBoxContainer { SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            root.AddChild(rightVBox);
+
+            var titleRow = new HBoxContainer();
+            titleRow.AddChild(new Label { Text = "Título:" });
+            _journalTitle = new LineEdit { PlaceholderText = "Título da anotação", SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            titleRow.AddChild(_journalTitle);
+            rightVBox.AddChild(titleRow);
+
+            var catRow = new HBoxContainer();
+            catRow.AddChild(new Label { Text = "Categoria:" });
+            _journalCategory = new OptionButton();
+            foreach (var cat in new[] { "Geral", "NPC", "Local", "Lore", "Sessão", "Handout" })
+                _journalCategory.AddItem(cat);
+            catRow.AddChild(_journalCategory);
+            _journalVisibleToggle = new CheckButton { Text = "Visível p/ jogadores" };
+            catRow.AddChild(_journalVisibleToggle);
+            rightVBox.AddChild(catRow);
+
+            _journalContent = new TextEdit
+            {
+                PlaceholderText = "Escreva sua anotação aqui...",
+                SizeFlagsVertical = (int)Control.SizeFlags.ExpandFill,
+                CustomMinimumSize = new Vector2(0, 340),
+                WrapMode = TextEdit.LineWrappingMode.Boundary
+            };
+            rightVBox.AddChild(_journalContent);
+
+            var saveBtnRow = new HBoxContainer();
+            var saveBtn = new Button { Text = "💾 Salvar", SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            saveBtnRow.AddChild(saveBtn);
+            rightVBox.AddChild(saveBtnRow);
+
+            // ── Event wiring ─────────────────────────────────────────────────
+            newBtn.Pressed += () =>
+            {
+                var entry = new JournalEntry { Title = "Nova Anotação" };
+                _currentCampaign.Journals.Add(entry);
+                RefreshJournalList();
+                _journalList!.Select(_currentCampaign.Journals.Count - 1);
+                _selectedJournalIndex = _currentCampaign.Journals.Count - 1;
+                LoadJournalEntry(entry);
+            };
+
+            delBtn.Pressed += () =>
+            {
+                if (_selectedJournalIndex < 0 || _selectedJournalIndex >= _currentCampaign.Journals.Count) return;
+                _currentCampaign.Journals.RemoveAt(_selectedJournalIndex);
+                _selectedJournalIndex = -1;
+                RefreshJournalList();
+                ClearJournalEditor();
+            };
+
+            saveBtn.Pressed += SaveSelectedJournalEntry;
+
+            shareBtn.Pressed += () =>
+            {
+                if (_selectedJournalIndex < 0 || _selectedJournalIndex >= _currentCampaign.Journals.Count) return;
+                SaveSelectedJournalEntry();
+                var entry = _currentCampaign.Journals[_selectedJournalIndex];
+                entry.IsVisibleToPlayers = true;
+                if (_networkService.IsConnected)
+                    _syncService.SyncJournalShared(entry.Id, entry.Title, entry.Content);
+                _chatController.SystemMessage($"📜 Handout '{entry.Title}' compartilhado com jogadores.");
+            };
+
+            _journalList.ItemSelected += idx =>
+            {
+                _selectedJournalIndex = (int)idx;
+                if (_selectedJournalIndex >= 0 && _selectedJournalIndex < _currentCampaign.Journals.Count)
+                    LoadJournalEntry(_currentCampaign.Journals[_selectedJournalIndex]);
+            };
+
+            _journalWindow.CloseRequested += () => _journalWindow.Visible = false;
+
+            RefreshJournalList();
+        }
+
+        private void OpenJournalWindow()
+        {
+            if (_journalWindow == null) return;
+            RefreshJournalList();
+            _journalWindow.Visible = true;
+            _journalWindow.GrabFocus();
+        }
+
+        private void RefreshJournalList()
+        {
+            if (_journalList == null) return;
+            _journalList.Clear();
+            foreach (var j in _currentCampaign.Journals)
+            {
+                var icon = j.IsVisibleToPlayers ? "📤" : "🔒";
+                _journalList.AddItem($"{icon} [{j.Category}] {j.Title}");
+            }
+        }
+
+        private void LoadJournalEntry(JournalEntry entry)
+        {
+            if (_journalTitle != null)   _journalTitle.Text = entry.Title;
+            if (_journalContent != null) _journalContent.Text = entry.Content;
+            if (_journalCategory != null)
+            {
+                var cats = new[] { "Geral", "NPC", "Local", "Lore", "Sessão", "Handout" };
+                var idx  = Array.IndexOf(cats, entry.Category);
+                _journalCategory.Selected = idx >= 0 ? idx : 0;
+            }
+            if (_journalVisibleToggle != null)
+                _journalVisibleToggle.ButtonPressed = entry.IsVisibleToPlayers;
+        }
+
+        private void SaveSelectedJournalEntry()
+        {
+            if (_selectedJournalIndex < 0 || _selectedJournalIndex >= _currentCampaign.Journals.Count) return;
+            var entry = _currentCampaign.Journals[_selectedJournalIndex];
+            if (_journalTitle != null)         entry.Title   = _journalTitle.Text;
+            if (_journalContent != null)       entry.Content = _journalContent.Text;
+            if (_journalCategory != null)      entry.Category = _journalCategory.GetItemText(_journalCategory.Selected);
+            if (_journalVisibleToggle != null)  entry.IsVisibleToPlayers = _journalVisibleToggle.ButtonPressed;
+            RefreshJournalList();
+        }
+
+        private void ClearJournalEditor()
+        {
+            if (_journalTitle   != null) _journalTitle.Text   = "";
+            if (_journalContent != null) _journalContent.Text = "";
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // Helper: convert plain dict back to Godot Dictionary (for token sync)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private Godot.Collections.Dictionary ConvertPlainToGodotDict(
+            System.Collections.Generic.Dictionary<string, object> plain)
+        {
+            var gd = new Godot.Collections.Dictionary();
+            foreach (var kv in plain)
+            {
+                gd[kv.Key] = kv.Value switch
+                {
+                    System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String
+                        => je.GetString() ?? "",
+                    System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.Number
+                        => je.TryGetInt32(out var i) ? (Variant)i : (Variant)je.GetDouble(),
+                    System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.True  => true,
+                    System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.False => false,
+                    _ => kv.Value?.ToString() ?? ""
+                };
+            }
+            return gd;
         }
 
     }

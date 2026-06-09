@@ -14,6 +14,8 @@ namespace TormentaVTT.UI
         private DiceParser _diceParser = new();
 
         public event Func<string, bool>? CommandTriggered;
+        /// <summary>Fires when the local user sends a chat message (not on received synced messages).</summary>
+        public event Action<ChatMessage>? MessageSent;
 
         public override void _Ready()
         {
@@ -36,7 +38,9 @@ namespace TormentaVTT.UI
             }
             else
             {
-                AddMessage(new ChatMessage("Jogador", text, ChatMessageType.Chat));
+                var msg = new ChatMessage("Jogador", text, ChatMessageType.Chat);
+                AddMessage(msg);
+                MessageSent?.Invoke(msg);
             }
 
             _chatInput.Text = string.Empty;

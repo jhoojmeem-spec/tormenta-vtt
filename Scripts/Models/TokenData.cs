@@ -14,6 +14,12 @@ namespace TormentaVTT.Models
         public CharacterSheet Sheet { get; set; } = new();
         public bool IsGM { get; set; }
 
+        /// <summary>PlayerId that owns this token (empty = GM-owned / unassigned).</summary>
+        public string OwnerId { get; set; } = string.Empty;
+
+        /// <summary>When true this token is visible only to the GM and never synced to players.</summary>
+        public bool IsGMOnly { get; set; } = false;
+
         public static TokenData Create(string name, string imagePath)
         {
             return new TokenData
@@ -34,6 +40,8 @@ namespace TormentaVTT.Models
                 ["image_path"] = ImagePath,
                 ["position"] = Position,
                 ["is_gm"] = IsGM,
+                ["owner_id"] = OwnerId,
+                ["is_gm_only"] = IsGMOnly,
                 ["sheet"] = Sheet.ToDictionary()
             };
         }
@@ -50,6 +58,18 @@ namespace TormentaVTT.Models
             if (data.TryGetValue("is_gm", out var isGmRaw))
             {
                 isGm = isGmRaw.AsBool();
+            }
+
+            var isGmOnly = false;
+            if (data.TryGetValue("is_gm_only", out var isGmOnlyRaw))
+            {
+                isGmOnly = isGmOnlyRaw.AsBool();
+            }
+
+            var ownerId = string.Empty;
+            if (data.TryGetValue("owner_id", out var ownerRaw))
+            {
+                ownerId = ownerRaw.ToString();
             }
 
             var sheet = new CharacterSheet();
@@ -69,6 +89,8 @@ namespace TormentaVTT.Models
                 ImagePath = data.GetValueOrDefault("image_path", string.Empty).ToString(),
                 Position = position,
                 IsGM = isGm,
+                OwnerId = ownerId,
+                IsGMOnly = isGmOnly,
                 Sheet = sheet
             };
         }

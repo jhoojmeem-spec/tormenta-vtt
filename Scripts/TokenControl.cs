@@ -15,6 +15,8 @@ namespace TormentaVTT.UI
 
         public event Action<TokenControl>? Selected;
         public event Action<TokenControl>? Dragged;
+        /// <summary>Fires once when the user releases the mouse button after dragging.</summary>
+        public event Action<TokenControl>? Dropped;
 
         public TokenControl(TokenData data)
         {
@@ -71,6 +73,7 @@ namespace TormentaVTT.UI
                 {
                     _dragging = false;
                     Dragged?.Invoke(this);
+                    Dropped?.Invoke(this);   // only on release — used for network sync
                 }
             }
 
