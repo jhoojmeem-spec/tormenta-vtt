@@ -44,6 +44,7 @@ namespace TormentaVTT.Network
         public event Action<string, string, string>? RemoteJournalShared;      // id, title, content
         public event Action<string>?                 RemoteFullStateSync;       // campaignJson
         public event Action<string, string, string>? RemotePlayerJoined;       // id, name, role
+        public event Action<string, string>?            RemoteOwnershipChanged; // tokenId, ownerId
         public event Action<string>?                 RemotePlayerLeft;          // id
         public event Action<string, string, string>? RemoteRoleAssigned;       // role, ownedTokenIds csv
 
@@ -241,6 +242,12 @@ namespace TormentaVTT.Network
                     {
                         var p = msg.DecodePayload<PlayerLeftPayload>();
                         RemotePlayerLeft?.Invoke(p.Id);
+                        break;
+                    }
+                    case NetMsgType.TokenOwnership:
+                    {
+                        var p = msg.DecodePayload<TokenOwnershipPayload>();
+                        RemoteOwnershipChanged?.Invoke(p.TokenId, p.OwnerId);
                         break;
                     }
                 }

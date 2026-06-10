@@ -140,6 +140,13 @@ namespace TormentaVTT.UI
             CurrentTurnChanged?.Invoke(null);
         }
 
+        public void SetCurrentIndex(int index)
+        {
+            if (_order.Count == 0) return;
+            _currentIndex = Math.Clamp(index, 0, _order.Count - 1);
+            CurrentTurnChanged?.Invoke(Current);
+        }
+
         public void AdvanceTurn()
         {
             if (!InCombat || _order.Count == 0)

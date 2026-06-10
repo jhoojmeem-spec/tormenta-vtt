@@ -392,6 +392,15 @@ namespace TormentaVTT.Models
             return key != null ? Attributes[key] : 0;
         }
 
+        public void SetAttributeValue(string attributeName, int value)
+        {
+            if (string.IsNullOrWhiteSpace(attributeName)) return;
+            var key = Attributes.Keys.FirstOrDefault(k =>
+                string.Equals(k, attributeName, StringComparison.OrdinalIgnoreCase));
+            if (key != null) Attributes[key] = value;
+            else             Attributes[attributeName] = value;
+        }
+
         public int GetAttributeModifier(string attributeName)
         {
             var value = GetAttributeValue(attributeName);

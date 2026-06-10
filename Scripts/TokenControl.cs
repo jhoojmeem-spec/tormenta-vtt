@@ -18,6 +18,12 @@ namespace TormentaVTT.UI
         /// <summary>Fires once when the user releases the mouse button after dragging.</summary>
         public event Action<TokenControl>? Dropped;
 
+        /// <summary>
+        /// When false, this token cannot be dragged.
+        /// Set by Main.cs based on role and ownership.
+        /// </summary>
+        public bool CanInteract { get; set; } = true;
+
         public TokenControl(TokenData data)
         {
             Data = data;
@@ -66,6 +72,7 @@ namespace TormentaVTT.UI
             {
                 if (button.Pressed)
                 {
+                    if (!CanInteract) return;   // ownership check — non-owner cannot drag
                     _dragging = true;
                     _dragOffset = button.Position;
                 }
@@ -77,7 +84,7 @@ namespace TormentaVTT.UI
                 }
             }
 
-            if (@event is InputEventMouseMotion motion && _dragging)
+            if (@event is InputEventMouseMotion motion && _dragging && CanInteract)
             {
                 Position += motion.Relative;
                 Dragged?.Invoke(this);

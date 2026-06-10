@@ -53,6 +53,12 @@ namespace TormentaVTT.UI
         private Button? _fogRevealAllButton;
         private Button? _fogHideAllButton;
         private bool _fogToolActive = false;
+        private bool _nextSpawnGMOnly = false;  // GM-only flag for next encounter spawn
+
+        // ── Lobby UI ─────────────────────────────────────────────────────────
+        private Control? _lobbyOverlay;
+        private Label?   _lobbyHostIpLabel;
+        private Label?   _lobbyStatusMsg;
 
         private readonly (string NodeName, string AttributeName)[] _attributeInputs = new[]
         {
@@ -184,6 +190,9 @@ namespace TormentaVTT.UI
             CreateSessionUi();
 
             _chatController.SystemMessage($"Conteúdo carregado: {_contentService.ClassCount} classes, {_contentService.RaceCount} raças, {_contentService.PowerCount} poderes, {_contentService.SpellCount} magias, {_contentService.ConditionCount} condições, {_contentService.ThreatCount} ameaças.");
+
+            // ── Lobby must be created LAST so it renders on top ───────────────
+            CreateLobbyUi();
         }
 
         // ── Main thread queue (pumped every frame for thread-safe network ops) ──
@@ -1303,33 +1312,53 @@ namespace TormentaVTT.UI
 
         private void UpdateInitiativePanel()
         {
-            var list = GetNode<ItemList>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeOrderList");
+            var list   = GetNode<ItemList>("SidebarPanel/SidebarVBox/InitiativeVBox/InitiativeOrderList");
+            var status = GetNode<Label>("SidebarPanel/SidebarVBox/InitiativeVBox/CombatStatusLabel");
             list.Clear();
 
-            var status = GetNode<Label>("SidebarPanel/SidebarVBox/InitiativeVBox/CombatStatusLabel");
             if (!_combatController.InCombat)
             {
                 status.Text = "Combate inativo";
                 return;
             }
 
-            status.Text = $"Turno atual: {_combatController.Current?.Name ?? "Nenhum"}";
+            var current = _combatController.Current;
+            status.Text = current != null
+                ? $"⚔ Vez de: {current.Name}  PV {current.Sheet.HP}"
+                : "Aguardando...";
 
             var order = _combatController.GetOrder();
             for (int i = 0; i < order.Count; i++)
             {
-                var entry = order[i];
-                var itemIndex = list.AddItem($"{i + 1}. {entry.Token.Name} ({entry.InitiativeRoll})");
-                list.SetItemMetadata(itemIndex, entry.Token.Id);
-                if (_combatController.Current != null && _combatController.Current.Id == entry.Token.Id)
-                {
-                    list.SetItemCustomBgColor(itemIndex, new Color(1.0f, 0.9f, 0.4f));
-                }
+                var entry   = order[i];
+                var token   = entry.Token;
+                var isCurrent = current != null && current.Id == token.Id;
+
+                var hpBar    = BuildHpBar(token.Sheet.HP, 20);   // simple text bar
+                var conds    = token.Sheet.Conditions.Count > 0
+                    ? $"  [{string.Join(",", token.Sheet.Conditions.Select(c => c.Name))}]"
+                    : "";
+                var marker   = isCurrent ? "▶ " : $"{i + 1}. ";
+                var label    = $"{marker}{token.Name}  Init:{entry.InitiativeRoll}  PV:{token.Sheet.HP}{hpBar}{conds}";
+
+                var itemIdx  = list.AddItem(label);
+                list.SetItemMetadata(itemIdx, token.Id);
+
+                if (isCurrent)
+                    list.SetItemCustomBgColor(itemIdx, new Color(1.0f, 0.85f, 0.2f, 0.35f));
+                else if (token.Sheet.HP <= 0)
+                    list.SetItemCustomBgColor(itemIdx, new Color(0.6f, 0.0f, 0.0f, 0.30f));
                 else
-                {
-                    list.SetItemCustomBgColor(itemIndex, Colors.Transparent);
-                }
+                    list.SetItemCustomBgColor(itemIdx, Colors.Transparent);
             }
+        }
+
+        private static string BuildHpBar(int hp, int max)
+        {
+            if (max <= 0) return "";
+            var pct   = Math.Clamp((float)hp / max, 0f, 1f);
+            var filled = (int)(pct * 8);
+            return " [" + new string('█', filled) + new string('░', 8 - filled) + "]";
         }
 
         private void OnInitiativeSelected(long index)
@@ -1711,6 +1740,13 @@ namespace TormentaVTT.UI
                 return;
             }
 
+            // Ownership check — players can only edit their own tokens
+            if (!CanControlToken(token))
+            {
+                _chatController.SystemMessage("Você não tem permissão para editar este token.");
+                return;
+            }
+
             token.Sheet.CharacterClass = GetNode<LineEdit>("SidebarPanel/SidebarVBox/ClassInput").Text;
             token.Sheet.Race = GetNode<LineEdit>("SidebarPanel/SidebarVBox/RaceInput").Text;
             token.Sheet.Level = (int)GetNode<SpinBox>("SidebarPanel/SidebarVBox/LevelInput").Value;
@@ -1721,6 +1757,9 @@ namespace TormentaVTT.UI
             StoreSheetInputs(token);
             UpdateSelectionPanel(token);
             _chatController.SystemMessage($"Ficha de {token.Name} atualizada.");
+
+            // Sync HP/PM changes to all connected clients
+            SyncTokenStatsIfConnected(token);
         }
 
         private void OnRemoveTokenPressed()
@@ -1765,9 +1804,7 @@ namespace TormentaVTT.UI
             token.Sheet.AddCondition(conditionName, duration);
 
             if (alreadyPresent)
-            {
                 _chatController.SystemMessage($"Condição '{conditionName}' atualizada em {token.Name}.");
-            }
             else
             {
                 var durationText = duration > 0 ? $" por {duration} turnos" : string.Empty;
@@ -1776,6 +1813,15 @@ namespace TormentaVTT.UI
 
             GetNode<LineEdit>("SidebarPanel/SidebarVBox/ConditionRow/ConditionInput").Text = string.Empty;
             UpdateSelectionPanel(token);
+            UpdateInitiativePanel();
+
+            // Sync: broadcast condition change as a combined stats + chat message
+            SyncTokenStatsIfConnected(token);
+            if (_networkService.IsConnected && !_isSyncing)
+            {
+                var msg = $"[Condição] {token.Name} → +{conditionName}";
+                _syncService.SyncChat("Sistema", msg, "System");
+            }
         }
 
         private void OnRemoveConditionPressed()
@@ -1787,7 +1833,7 @@ namespace TormentaVTT.UI
                 return;
             }
 
-            var list = GetNode<ItemList>("SidebarPanel/SidebarVBox/ConditionsList");
+            var list     = GetNode<ItemList>("SidebarPanel/SidebarVBox/ConditionsList");
             var selected = list.GetSelectedItems();
             if (selected.Length == 0)
             {
@@ -1799,6 +1845,14 @@ namespace TormentaVTT.UI
             token.Sheet.RemoveCondition(condition);
             _chatController.SystemMessage($"Condição '{condition}' removida de {token.Name}.");
             UpdateSelectionPanel(token);
+            UpdateInitiativePanel();
+
+            SyncTokenStatsIfConnected(token);
+            if (_networkService.IsConnected && !_isSyncing)
+            {
+                var msg = $"[Condição] {token.Name} → -{condition}";
+                _syncService.SyncChat("Sistema", msg, "System");
+            }
         }
 
         private void OnMapFileSelected(string path)
@@ -2032,14 +2086,16 @@ namespace TormentaVTT.UI
                 Name = "ContentClassesList",
                 SelectMode = ItemList.SelectModeEnum.Single,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-                CustomMinimumSize = new Vector2(0, 120)
+                CustomMinimumSize = new Vector2(0, 80)
             };
             _applySelectedClassButton = new Button { Text = "Aplicar classe" };
             var classButtons = new HBoxContainer();
-            var reloadContentButton = new Button { Text = "Recarregar conteúdo" };
-            var importModelButton = new Button { Text = "Importar modelagem" };
+            var reloadContentButton = new Button { Text = "↻ Recarregar" };
+            var importModelButton = new Button { Text = "📥 Importar" };
+            var openLibraryButton = new Button { Text = "📖 Biblioteca..." };
             classButtons.AddChild(reloadContentButton);
             classButtons.AddChild(importModelButton);
+            classButtons.AddChild(openLibraryButton);
             sidebar.AddChild(classesLabel);
             sidebar.AddChild(_contentClassesList);
             sidebar.AddChild(_applySelectedClassButton);
@@ -2051,7 +2107,7 @@ namespace TormentaVTT.UI
                 Name = "ContentRacesList",
                 SelectMode = ItemList.SelectModeEnum.Single,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-                CustomMinimumSize = new Vector2(0, 100)
+                CustomMinimumSize = new Vector2(0, 70)
             };
             _applySelectedRaceButton = new Button { Text = "Aplicar raça" };
             sidebar.AddChild(racesLabel);
@@ -2064,7 +2120,7 @@ namespace TormentaVTT.UI
                 Name = "ContentPowersList",
                 SelectMode = ItemList.SelectModeEnum.Single,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-                CustomMinimumSize = new Vector2(0, 100)
+                CustomMinimumSize = new Vector2(0, 70)
             };
             _useSelectedPowerButton = new Button { Text = "Usar poder" };
             sidebar.AddChild(powersLabel);
@@ -2077,7 +2133,7 @@ namespace TormentaVTT.UI
                 Name = "ContentSpellsList",
                 SelectMode = ItemList.SelectModeEnum.Single,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-                CustomMinimumSize = new Vector2(0, 120)
+                CustomMinimumSize = new Vector2(0, 80)
             };
             var spellRow = new HBoxContainer();
             _spellTargetInput = new LineEdit { Name = "SpellTargetInput", PlaceholderText = "alvo (opcional)" };
@@ -2121,11 +2177,11 @@ namespace TormentaVTT.UI
                     RefreshContentLists();
                     _chatController.SystemMessage(err);
                 }
-                else
-                {
-                    _chatController.SystemMessage($"Falha na importação: {err}");
-                }
+                else _chatController.SystemMessage($"Falha na importação: {err}");
             };
+
+            // Open full library window
+            openLibraryButton.Pressed += () => OpenLibraryWindow();
 
             var conditionsLabel = new Label { Text = "Condições carregadas" };
             _contentConditionsList = new ItemList
@@ -2133,12 +2189,12 @@ namespace TormentaVTT.UI
                 Name = "ContentConditionsList",
                 SelectMode = ItemList.SelectModeEnum.Single,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-                CustomMinimumSize = new Vector2(0, 120)
+                CustomMinimumSize = new Vector2(0, 80)
             };
             var conditionRow = new HBoxContainer();
             _conditionDurationInput = new LineEdit { Name = "ConditionDurationInput", PlaceholderText = "turnos (opcional)" };
-            _applySelectedConditionButton = new Button { Text = "Aplicar condição" };
-            _removeSelectedConditionButton = new Button { Text = "Remover condição" };
+            _applySelectedConditionButton = new Button { Text = "Aplicar" };
+            _removeSelectedConditionButton = new Button { Text = "Remover" };
             conditionRow.AddChild(_conditionDurationInput);
             conditionRow.AddChild(_applySelectedConditionButton);
             conditionRow.AddChild(_removeSelectedConditionButton);
@@ -2164,9 +2220,13 @@ namespace TormentaVTT.UI
             };
             var threatRow = new HBoxContainer();
             _threatNameInput = new LineEdit { Name = "ThreatNameInput", PlaceholderText = "nome (opcional)" };
-            _spawnThreatButton = new Button { Text = "Spawnar ameaça" };
+            _spawnThreatButton = new Button { Text = "Spawnar" };
+            var spawnCombatButton = new Button { Text = "⚔ Spawn+Combate" };
+            var gmOnlyCheck = new CheckButton { Text = "GM-only" };
             threatRow.AddChild(_threatNameInput);
             threatRow.AddChild(_spawnThreatButton);
+            threatRow.AddChild(spawnCombatButton);
+            threatRow.AddChild(gmOnlyCheck);
 
             sidebar.AddChild(threatsLabel);
             sidebar.AddChild(_contentThreatsList);
@@ -2176,6 +2236,32 @@ namespace TormentaVTT.UI
                 _contentThreatsList.ItemSelected += OnContentThreatSelected;
             if (_spawnThreatButton != null)
                 _spawnThreatButton.Pressed += OnSpawnThreatPressed;
+
+            spawnCombatButton.Pressed += () =>
+            {
+                OnSpawnThreatPressed();
+                var newest = _currentCampaign.Tokens.LastOrDefault();
+                if (newest != null && !_combatController.InCombat)
+                {
+                    _combatController.StartCombat(_currentCampaign.Tokens, true);
+                    _chatController.SystemMessage($"⚔ Combate iniciado com {newest.Name}.");
+                    SyncCombatStarted();
+                }
+                else if (newest != null && _combatController.InCombat)
+                {
+                    _combatController.AddTokenToOrder(newest, true);
+                    _chatController.SystemMessage($"{newest.Name} adicionado ao combate.");
+                    SyncCombatStarted();
+                }
+                UpdateInitiativePanel();
+            };
+
+            // GM-only check: marking the NEXT spawn as GM-only
+            gmOnlyCheck.Toggled += on =>
+            {
+                // Stored as a field for OnSpawnThreatPressed to read
+                _nextSpawnGMOnly = on;
+            };
 
             // Sheet import/export
             var sheetRow = new HBoxContainer();
@@ -2509,7 +2595,9 @@ namespace TormentaVTT.UI
             }
 
             var threatName = _contentThreatsList.GetItemMetadata(selectedItems[0]).ToString();
-            var threatDef = _contentService.Threats.FirstOrDefault(t => t.Name.Equals(threatName, StringComparison.OrdinalIgnoreCase) || t.Id.Equals(threatName, StringComparison.OrdinalIgnoreCase));
+            var threatDef = _contentService.Threats.FirstOrDefault(t =>
+                t.Name.Equals(threatName, StringComparison.OrdinalIgnoreCase) ||
+                t.Id.Equals(threatName, StringComparison.OrdinalIgnoreCase));
             if (threatDef == null)
             {
                 _chatController.SystemMessage("Ameaça selecionada não encontrada.");
@@ -2517,27 +2605,27 @@ namespace TormentaVTT.UI
             }
 
             var tokenName = _threatNameInput?.Text?.Trim();
-            if (string.IsNullOrEmpty(tokenName))
-                tokenName = threatDef.Name;
+            if (string.IsNullOrEmpty(tokenName)) tokenName = threatDef.Name;
 
             var token = TokenData.Create(tokenName, string.Empty);
-            token.Sheet.Name = tokenName;
+            token.Sheet.Name           = tokenName;
             token.Sheet.CharacterClass = threatDef.Type;
-            token.Sheet.Level = threatDef.Level;
-            token.Sheet.HP = threatDef.HP;
-            token.Sheet.Defense = threatDef.Defense;
+            token.Sheet.Level          = threatDef.Level;
+            token.Sheet.HP             = threatDef.HP;
+            token.Sheet.Defense        = threatDef.Defense;
+            token.IsGMOnly             = _nextSpawnGMOnly;
 
             foreach (var attr in threatDef.Attributes)
-            {
                 if (token.Sheet.Attributes.ContainsKey(attr.Key))
                     token.Sheet.Attributes[attr.Key] = attr.Value;
-            }
 
             token.Position = _mapController.GetViewportCenterMapPosition();
             _currentCampaign.Tokens.Add(token);
             _mapController.AddToken(token);
             UpdateAssetList();
-            _chatController.SystemMessage($"Ameaça '{tokenName}' spawnada no mapa.");
+
+            var gmOnlyNote = _nextSpawnGMOnly ? " [GM-only]" : "";
+            _chatController.SystemMessage($"Ameaça '{tokenName}' spawnada no mapa{gmOnlyNote}.");
         }
 
         private void CreateSheetEditorUi()
@@ -2769,21 +2857,21 @@ namespace TormentaVTT.UI
                 return;
             }
 
-            // Hook host events
+            // Hook host events (guard against double-subscription)
+            _networkService.ClientConnected    -= OnClientConnected;
+            _networkService.ClientDisconnected -= OnClientDisconnected;
             _networkService.ClientConnected    += OnClientConnected;
             _networkService.ClientDisconnected += OnClientDisconnected;
 
+            _chatController.PlayerName = _localPlayerName;
             _mapController.ApplyVisibilityMode(true);
-            _chatController.SystemMessage($"✅ Hospedando na porta {port} como '{_localPlayerName}'. Passe seu IP para os jogadores.");
+            _chatController.SystemMessage($"✅ Hospedando na porta {port} como '{_localPlayerName}'. IP: {GetLocalIP()}");
             UpdateSessionUI();
 
-            // Add GM as first player
             var gmSession = new PlayerSession
             {
-                Id          = _networkService.LocalId,
-                DisplayName = _localPlayerName,
-                Role        = RoleType.GM,
-                IsConnected = true
+                Id = _networkService.LocalId, DisplayName = _localPlayerName,
+                Role = RoleType.GM, IsConnected = true
             };
             _connectedPlayers.Clear();
             _connectedPlayers.Add(gmSession);
@@ -3153,12 +3241,35 @@ namespace TormentaVTT.UI
                     _combatController.AddTokenToOrder(token, true);
                     UpdateInitiativePanel();
                 }
+                ApplyTokenInteractivity(token);
+
                 if (!_networkService.IsConnected || _isSyncing || token.IsGMOnly) return;
-                // Serialize token dict to JSON for sync
-                var dict  = token.ToDictionary();
-                var plain = ConvertGodotToPlainObject(dict);
-                var json  = System.Text.Json.JsonSerializer.Serialize(plain);
-                _syncService.SyncTokenSpawned(json);
+
+                // Serialize token with explicit flat fields — avoids Godot Vector2 serialization issues
+                var payload = new
+                {
+                    id         = token.Id,
+                    name       = token.Name,
+                    imagePath  = token.ImagePath,
+                    posX       = token.Position.X,
+                    posY       = token.Position.Y,
+                    ownerId    = token.OwnerId,
+                    isGMOnly   = token.IsGMOnly,
+                    hp         = token.Sheet.HP,
+                    pm         = token.Sheet.PM,
+                    charClass  = token.Sheet.CharacterClass,
+                    race       = token.Sheet.Race,
+                    level      = token.Sheet.Level,
+                    defense    = token.Sheet.Defense,
+                    initiative = token.Sheet.Initiative,
+                    forca      = token.Sheet.GetAttributeValue("Força"),
+                    destreza   = token.Sheet.GetAttributeValue("Destreza"),
+                    const_     = token.Sheet.GetAttributeValue("Constituição"),
+                    intel      = token.Sheet.GetAttributeValue("Inteligência"),
+                    sab        = token.Sheet.GetAttributeValue("Sabedoria"),
+                    carisma    = token.Sheet.GetAttributeValue("Carisma")
+                };
+                _syncService.SyncTokenSpawned(System.Text.Json.JsonSerializer.Serialize(payload));
             };
 
             // Token removed from map
@@ -3204,7 +3315,15 @@ namespace TormentaVTT.UI
             _syncService.RemoteChatReceived += (sender, text, type) =>
             {
                 _isSyncing = true;
-                _chatController.AddSystemMessage($"[{sender}] {text}");
+                var msgType = type switch
+                {
+                    "Roll"    => ChatMessageType.Roll,
+                    "Whisper" => ChatMessageType.Whisper,
+                    "System"  => ChatMessageType.System,
+                    _         => ChatMessageType.Chat
+                };
+                // Display with the real sender name, not "Sistema"
+                _chatController.AddMessage(new ChatMessage(sender, text, msgType));
                 _isSyncing = false;
             };
 
@@ -3223,16 +3342,35 @@ namespace TormentaVTT.UI
                 _isSyncing = true;
                 try
                 {
-                    var raw  = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(tokenJson);
-                    if (raw == null) return;
-                    var gd   = ConvertPlainToGodotDict(raw);
-                    var token= TokenData.FromDictionary(gd);
-                    token.Position = _mapController.GetViewportCenterMapPosition();
+                    var j = System.Text.Json.JsonDocument.Parse(tokenJson).RootElement;
+                    var token = TokenData.Create(JStr(j, "name", "Token"), JStr(j, "imagePath", ""));
+                    token.Id       = JStr(j, "id", token.Id);
+                    token.OwnerId  = JStr(j, "ownerId", "");
+                    token.IsGMOnly = JBool(j, "isGMOnly");
+                    token.Position = new Vector2(JFloat(j, "posX"), JFloat(j, "posY"));
+
+                    token.Sheet.HP               = JInt(j, "hp", 10);
+                    token.Sheet.PM               = JInt(j, "pm", 10);
+                    token.Sheet.CharacterClass   = JStr(j, "charClass", "Guerreiro");
+                    token.Sheet.Race             = JStr(j, "race", "Humano");
+                    token.Sheet.Level            = JInt(j, "level", 1);
+                    token.Sheet.Defense          = JInt(j, "defense", 12);
+                    token.Sheet.Initiative       = JInt(j, "initiative", 0);
+                    token.Sheet.SetAttributeValue("Força",         JInt(j, "forca",    10));
+                    token.Sheet.SetAttributeValue("Destreza",      JInt(j, "destreza", 10));
+                    token.Sheet.SetAttributeValue("Constituição",  JInt(j, "const_",   10));
+                    token.Sheet.SetAttributeValue("Inteligência",  JInt(j, "intel",    10));
+                    token.Sheet.SetAttributeValue("Sabedoria",     JInt(j, "sab",      10));
+                    token.Sheet.SetAttributeValue("Carisma",       JInt(j, "carisma",  10));
+
+                    // Don't show GM-only tokens to players
+                    if (token.IsGMOnly && _localRole != RoleType.GM) { _isSyncing = false; return; }
+
                     _currentCampaign.Tokens.Add(token);
                     _mapController.AddToken(token);
-                    _chatController.SystemMessage($"Token '{token.Name}' adicionado remotamente.");
+                    _chatController.SystemMessage($"Token '{token.Name}' adicionado à mesa.");
                 }
-                catch { }
+                catch (Exception e) { GD.PrintErr($"[RemoteTokenSpawned] {e.Message}"); }
                 _isSyncing = false;
             };
 
@@ -3289,9 +3427,10 @@ namespace TormentaVTT.UI
             _syncService.RemoteCombatAdvanced += current =>
             {
                 _isSyncing = true;
-                // Rebuild local order to match host's current index
+                _combatController.SetCurrentIndex(current);
                 UpdateInitiativePanel();
-                _chatController.SystemMessage("▶ Turno avançado pelo GM.");
+                var name = _combatController.Current?.Name ?? "?";
+                _chatController.SystemMessage($"▶ Vez de: {name}");
                 _isSyncing = false;
             };
 
@@ -3352,6 +3491,12 @@ namespace TormentaVTT.UI
                     Role = _localRole, OwnedTokenIds = ownedIds
                 };
                 if (!_connectedPlayers.Any(p => p.Id == myId)) _connectedPlayers.Add(me);
+                _chatController.PlayerName = _localPlayerName;
+
+                // Refresh interactivity on all existing tokens
+                foreach (var t in _currentCampaign.Tokens)
+                    ApplyTokenInteractivity(t);
+
                 UpdateSessionUI();
                 _chatController.SystemMessage($"Entrou como: {_localRole} — {_localPlayerName}");
             };
@@ -3372,6 +3517,25 @@ namespace TormentaVTT.UI
                 }
                 catch (Exception e) { GD.PrintErr($"[FullStateSync] {e.Message}"); }
                 _isSyncing = false;
+            };
+
+            // ── Ownership assignment (host assigns token to player) ────────────
+            _syncService.RemoteOwnershipChanged += (tokenId, ownerId) =>
+            {
+                // Update local session
+                var me = _connectedPlayers.FirstOrDefault(p => p.Id == _networkService.LocalId);
+                if (me != null && ownerId == _networkService.LocalId)
+                {
+                    if (!me.OwnedTokenIds.Contains(tokenId)) me.OwnedTokenIds.Add(tokenId);
+                    _chatController.SystemMessage($"✅ Você foi atribuído como dono do token '{tokenId}'.");
+                }
+                // Refresh token interactivity for affected token
+                var token = _currentCampaign.Tokens.FirstOrDefault(t => t.Id == tokenId);
+                if (token != null)
+                {
+                    token.OwnerId = ownerId;
+                    ApplyTokenInteractivity(token);
+                }
             };
 
             // ── Session events ────────────────────────────────────────────────
@@ -3489,8 +3653,21 @@ namespace TormentaVTT.UI
         {
             var toolbar = GetNode<HBoxContainer>("Toolbar/TopButtons");
 
-            var sep = new VSeparator();
-            toolbar.AddChild(sep);
+            toolbar.AddChild(new VSeparator());
+
+            // Library button (quick access from toolbar)
+            var libBtn = new Button { Text = "📖" };
+            libBtn.TooltipText = "Biblioteca de Conteúdo";
+            libBtn.Pressed += OpenLibraryWindow;
+            toolbar.AddChild(libBtn);
+
+            // Owner button
+            var ownBtn = new Button { Text = "👤" };
+            ownBtn.TooltipText = "Atribuir token a jogador";
+            ownBtn.Pressed += OpenOwnershipDialog;
+            toolbar.AddChild(ownBtn);
+
+            toolbar.AddChild(new VSeparator());
 
             _fogToggleButton = new Button { Text = "Névoa OFF", ToggleMode = true };
             _fogRevealButton = new Button { Text = "🔦 Revelar", ToggleMode = true };
@@ -3572,15 +3749,28 @@ namespace TormentaVTT.UI
             };
             sidebar.AddChild(_sessionPlayersLabel);
 
-            var disconnectBtn = new Button { Text = "Desconectar" };
+            var sessionBtns = new HBoxContainer();
+
+            var assignOwnerBtn = new Button { Text = "👤 Atribuir Token" };
+            assignOwnerBtn.Pressed += OpenOwnershipDialog;
+
+            var libraryBtn = new Button { Text = "📖 Biblioteca" };
+            libraryBtn.Pressed += OpenLibraryWindow;
+
+            var disconnectBtn = new Button { Text = "⏏ Sair" };
             disconnectBtn.Pressed += () =>
             {
                 _networkService.Stop();
                 _connectedPlayers.Clear();
                 UpdateSessionUI();
                 _chatController.SystemMessage("Desconectado da sessão.");
+                _lobbyOverlay!.Visible = true;
             };
-            sidebar.AddChild(disconnectBtn);
+
+            sessionBtns.AddChild(assignOwnerBtn);
+            sessionBtns.AddChild(libraryBtn);
+            sessionBtns.AddChild(disconnectBtn);
+            sidebar.AddChild(sessionBtns);
         }
 
         private void UpdateSessionUI()
@@ -3800,6 +3990,557 @@ namespace TormentaVTT.UI
                 };
             }
             return gd;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // JSON ELEMENT HELPERS (for flat token deserialization)
+        // ═══════════════════════════════════════════════════════════════════════
+        private static string JStr(System.Text.Json.JsonElement j, string key, string def = "")
+            => j.TryGetProperty(key, out var v) ? v.GetString() ?? def : def;
+        private static int JInt(System.Text.Json.JsonElement j, string key, int def = 0)
+            => j.TryGetProperty(key, out var v) && v.TryGetInt32(out var i) ? i : def;
+        private static float JFloat(System.Text.Json.JsonElement j, string key, float def = 0f)
+            => j.TryGetProperty(key, out var v) ? (float)v.GetDouble() : def;
+        private static bool JBool(System.Text.Json.JsonElement j, string key, bool def = false)
+            => j.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // OWNERSHIP — set token interactivity based on role
+        // ═══════════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Sets CanInteract on the TokenControl that corresponds to this token.
+        /// GM can always interact; players only interact with their own tokens.
+        /// </summary>
+        private void ApplyTokenInteractivity(TokenData token)
+        {
+            // MapController doesn't expose the token nodes directly,
+            // so we apply via a method on MapController
+            _mapController.SetTokenInteractivity(token.Id, CanControlToken(token));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // LOCAL IP HELPER
+        // ═══════════════════════════════════════════════════════════════════════
+        private static string GetLocalIP()
+        {
+            try
+            {
+                var host = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName());
+                foreach (var ip in host.AddressList)
+                    if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        return ip.ToString();
+            }
+            catch { }
+            return "127.0.0.1";
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // LIBRARY WINDOW  (ETAPA 9 — Biblioteca de Conteúdo com busca/filtro)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private Window? _libraryWindow;
+        private LineEdit? _librarySearch;
+        private TabContainer? _libraryTabs;
+
+        private void OpenLibraryWindow()
+        {
+            if (_libraryWindow == null) BuildLibraryWindow();
+            _libraryWindow!.Visible = true;
+            _libraryWindow.GrabFocus();
+            FilterLibrary(_librarySearch?.Text ?? "");
+        }
+
+        private void BuildLibraryWindow()
+        {
+            _libraryWindow = new Window
+            {
+                Title   = "📖 Biblioteca de Conteúdo Tormenta20",
+                Size    = new Vector2I(700, 560),
+                Visible = false
+            };
+            AddChild(_libraryWindow);
+
+            var vbox = new VBoxContainer();
+            vbox.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect, margin: 8);
+            _libraryWindow.AddChild(vbox);
+
+            // Search bar
+            var searchRow = new HBoxContainer();
+            searchRow.AddChild(new Label { Text = "🔍 Buscar:" });
+            _librarySearch = new LineEdit
+            {
+                PlaceholderText     = "Digite para filtrar…",
+                SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill
+            };
+            searchRow.AddChild(_librarySearch);
+            vbox.AddChild(searchRow);
+
+            _librarySearch.TextChanged += _ => FilterLibrary(_librarySearch.Text);
+
+            // Tabs
+            _libraryTabs = new TabContainer { SizeFlagsVertical = (int)Control.SizeFlags.ExpandFill };
+            vbox.AddChild(_libraryTabs);
+
+            void AddTab(string name, IEnumerable<string> items, Action<string> onApply, string applyLabel)
+            {
+                var tab  = new VBoxContainer { Name = name };
+                var list = new ItemList
+                {
+                    Name = $"Lib{name}List",
+                    CustomMinimumSize = new Vector2(0, 380),
+                    SizeFlagsVertical = (int)Control.SizeFlags.ExpandFill
+                };
+                foreach (var item in items) list.AddItem(item);
+
+                var info = new Label { AutowrapMode = TextServer.AutowrapMode.Word, Text = "" };
+                var btn  = new Button { Text = applyLabel };
+                btn.Pressed += () =>
+                {
+                    var sel = list.GetSelectedItems();
+                    if (sel.Length == 0) return;
+                    onApply(list.GetItemText(sel[0]));
+                };
+                list.ItemSelected += idx => info.Text = list.GetItemText((int)idx);
+                tab.AddChild(list);
+                tab.AddChild(info);
+                tab.AddChild(btn);
+                _libraryTabs.AddChild(tab);
+            }
+
+            AddTab("Classes",   _contentService.Classes.Select(c => $"{c.Name}  —  d{c.HitDie}  {c.Description}"),
+                name => OnApplyContentByName("class", name.Split("  —  ")[0]), "Aplicar ao token selecionado");
+
+            AddTab("Raças",     _contentService.Races.Select(r => $"{r.Name}  —  {r.Description}"),
+                name => OnApplyContentByName("race",  name.Split("  —  ")[0]), "Aplicar ao token selecionado");
+
+            AddTab("Poderes",   _contentService.Powers.Select(p => $"{p.Name}  ({p.Type})  —  {p.Description}"),
+                name => OnApplyContentByName("power", name.Split("  —  ")[0]), "Usar poder");
+
+            AddTab("Magias",    _contentService.Spells.Select(s => $"{s.Name}  Nv{s.Level} [{s.School}]  —  {s.Description}"),
+                name => OnApplyContentByName("spell", name.Split("  —  ")[0]), "Lançar magia");
+
+            AddTab("Condições", _contentService.Conditions.Select(c => $"{c.Name}  —  {c.Description}"),
+                name => OnApplyContentByName("condition", name.Split("  —  ")[0]), "Aplicar ao token selecionado");
+
+            AddTab("Ameaças",   _contentService.Threats.Select(t => $"{t.Name}  Nv{t.Level}  PV:{t.HP}  DEF:{t.Defense}"),
+                name => OnApplyContentByName("threat", name.Split("  ")[0]), "Spawnar no mapa");
+
+            _libraryWindow.CloseRequested += () => _libraryWindow.Visible = false;
+        }
+
+        private void FilterLibrary(string term)
+        {
+            if (_libraryTabs == null) return;
+            term = term.Trim().ToLowerInvariant();
+
+            for (int t = 0; t < _libraryTabs.GetTabCount(); t++)
+            {
+                var tab = _libraryTabs.GetTabControl(t);
+                var list = tab.GetChildren().OfType<ItemList>().FirstOrDefault();
+                if (list == null) continue;
+
+                for (int i = 0; i < list.ItemCount; i++)
+                {
+                    var text    = list.GetItemText(i).ToLowerInvariant();
+                    var visible = string.IsNullOrEmpty(term) || text.Contains(term);
+                    list.SetItemDisabled(i, !visible);
+                    // Godot 4: hide via custom colour — dimmed when not matching
+                    list.SetItemCustomFgColor(i, visible ? Colors.White : new Color(1, 1, 1, 0.2f));
+                }
+            }
+        }
+
+        private void OnApplyContentByName(string kind, string name)
+        {
+            var token = _mapController.SelectedToken;
+            switch (kind)
+            {
+                case "class":
+                    var cls = FindClassByName(name);
+                    if (cls != null && token != null)
+                    {
+                        ApplyClassDefinition(token, cls);
+                        UpdateSelectionPanel(token);
+                        SyncTokenStatsIfConnected(token);
+                        _chatController.SystemMessage($"Classe '{cls.Name}' aplicada a {token.Name}.");
+                    }
+                    else _chatController.SystemMessage("Selecione um token e verifique se a classe existe.");
+                    break;
+
+                case "race":
+                    var rce = _contentService.Races.FirstOrDefault(r =>
+                        r.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (rce != null && token != null)
+                    {
+                        token.Sheet.Race = rce.Name;
+                        if (rce.AttributeBonus != null)
+                            foreach (var kv in rce.AttributeBonus)
+                                if (token.Sheet.Attributes.ContainsKey(kv.Key))
+                                    token.Sheet.Attributes[kv.Key] += kv.Value;
+                        UpdateSelectionPanel(token);
+                        SyncTokenStatsIfConnected(token);
+                        _chatController.SystemMessage($"Raça '{rce.Name}' aplicada a {token.Name}.");
+                    }
+                    else _chatController.SystemMessage("Selecione um token e verifique se a raça existe.");
+                    break;
+
+                case "power":
+                    var pwr = _contentService.Powers.FirstOrDefault(p =>
+                        p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (pwr != null && token != null)
+                    {
+                        _chatController.SystemMessage($"Poder '{pwr.Name}': {pwr.Description}");
+                    }
+                    else _chatController.SystemMessage("Selecione um token.");
+                    break;
+
+                case "spell":
+                    var spl = FindSpellByName(name);
+                    if (spl == null) { _chatController.SystemMessage($"Magia '{name}' não encontrada."); break; }
+                    if (token == null) { _chatController.SystemMessage("Selecione um token para lançar a magia."); break; }
+                    if (token.Sheet.PM < spl.CostPM)
+                    {
+                        _chatController.SystemMessage($"PM insuficiente ({token.Sheet.PM}/{spl.CostPM}).");
+                        break;
+                    }
+                    token.Sheet.PM -= spl.CostPM;
+                    _chatController.SystemMessage($"✨ {token.Name} lança {spl.Name} (custos {spl.CostPM} PM). Efeito: {spl.Effect}");
+                    UpdateSelectionPanel(token);
+                    SyncTokenStatsIfConnected(token);
+                    break;
+
+                case "condition":
+                    var cond = _contentService.Conditions.FirstOrDefault(c =>
+                        c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (cond != null && token != null)
+                    {
+                        token.Sheet.AddCondition(cond.Name, -1);
+                        UpdateSelectionPanel(token);
+                        SyncTokenStatsIfConnected(token);
+                        if (_networkService.IsConnected && !_isSyncing)
+                            _syncService.SyncChat("Sistema", $"[Condição] {token.Name} → +{cond.Name}", "System");
+                        _chatController.SystemMessage($"Condição '{cond.Name}' aplicada a {token.Name}.");
+                    }
+                    else _chatController.SystemMessage("Selecione um token.");
+                    break;
+
+                case "threat":
+                    _chatController.SystemMessage($"Selecione '{name}' na lista de ameaças e clique Spawnar.");
+                    break;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // TOKEN OWNERSHIP ASSIGNMENT  (ETAPA 4)
+        // ═══════════════════════════════════════════════════════════════════════
+
+        private void OpenOwnershipDialog()
+        {
+            var token = _mapController.SelectedToken;
+            if (token == null) { _chatController.SystemMessage("Selecione um token primeiro."); return; }
+            if (_localRole != RoleType.GM) { _chatController.SystemMessage("Apenas o GM pode atribuir ownership."); return; }
+            if (_connectedPlayers.Count <= 1) { _chatController.SystemMessage("Nenhum jogador conectado."); return; }
+
+            var dlg = new AcceptDialog { Title = $"Atribuir owner: {token.Name}" };
+            var vb  = new VBoxContainer();
+            dlg.AddChild(vb);
+
+            vb.AddChild(new Label { Text = "Selecione o jogador responsável:" });
+            var opts = new OptionButton();
+            opts.AddItem("(sem dono — GM controla)");
+            foreach (var p in _connectedPlayers.Where(p => !p.IsGM))
+                opts.AddItem($"{p.DisplayName}  [{p.Id}]");
+            vb.AddChild(opts);
+
+            var gmOnlyRow = new HBoxContainer();
+            var gmOnly = new CheckButton { Text = "Visível apenas para o GM" };
+            gmOnly.ButtonPressed = token.IsGMOnly;
+            gmOnlyRow.AddChild(gmOnly);
+            vb.AddChild(gmOnlyRow);
+
+            AddChild(dlg);
+            dlg.PopupCentered();
+
+            dlg.Confirmed += () =>
+            {
+                // Apply GM-only flag
+                token.IsGMOnly = gmOnly.ButtonPressed;
+
+                // Apply owner
+                if (opts.Selected <= 0)
+                {
+                    token.OwnerId = "";
+                    _chatController.SystemMessage($"{token.Name}: sem dono atribuído.");
+                }
+                else
+                {
+                    var label    = opts.GetItemText(opts.Selected);
+                    var playerId = label.Split('[', ']')[1];
+                    token.OwnerId = playerId;
+
+                    var player = _connectedPlayers.FirstOrDefault(p => p.Id == playerId);
+                    if (player != null && !player.OwnedTokenIds.Contains(token.Id))
+                        player.OwnedTokenIds.Add(token.Id);
+
+                    _chatController.SystemMessage($"{token.Name}: atribuído a {player?.DisplayName ?? playerId}.");
+
+                    // Notify the player of their new ownership via network
+                    if (_networkService.IsConnected)
+                    {
+                        var ownMsg = NetMsg.Encode(NetMsgType.TokenOwnership, _networkService.LocalId,
+                            new TokenOwnershipPayload { TokenId = token.Id, OwnerId = playerId });
+                        _ = _networkService.SendAsync(ownMsg);
+                    }
+                }
+
+                // Update visibility on map
+                _mapController.ApplyVisibilityMode(_localRole == RoleType.GM);
+                ApplyTokenInteractivity(token);
+                dlg.QueueFree();
+            };
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // LOBBY SCREEN
+        // ═══════════════════════════════════════════════════════════════════════
+        private void CreateLobbyUi()
+        {
+            // Full-screen overlay — added last so it renders on top
+            _lobbyOverlay = new ColorRect
+            {
+                Color             = new Color(0.08f, 0.08f, 0.12f, 0.97f),
+                AnchorRight       = 1f,
+                AnchorBottom      = 1f,
+                MouseFilter       = MouseFilterEnum.Stop
+            };
+            AddChild(_lobbyOverlay);
+
+            // Centred card
+            var card = new PanelContainer();
+            card.SetAnchorsPreset(Control.LayoutPreset.Center);
+            card.CustomMinimumSize = new Vector2(480, 480);
+            _lobbyOverlay.AddChild(card);
+
+            var vbox = new VBoxContainer();
+            vbox.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect, margin: 20);
+            card.AddChild(vbox);
+
+            // ── Title ─────────────────────────────────────────────────────────
+            var title = new Label
+            {
+                Text                = "⚔  TORMENTA VTT",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                CustomMinimumSize   = new Vector2(0, 48)
+            };
+            title.AddThemeFontSizeOverride("font_size", 28);
+            vbox.AddChild(title);
+
+            var subtitle = new Label
+            {
+                Text                = "Virtual Tabletop para Tormenta20",
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            vbox.AddChild(subtitle);
+            vbox.AddChild(new HSeparator());
+
+            // ── Status message ────────────────────────────────────────────────
+            _lobbyStatusMsg = new Label
+            {
+                Text                = "",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                AutowrapMode        = TextServer.AutowrapMode.Word
+            };
+            vbox.AddChild(_lobbyStatusMsg);
+
+            // ── Main menu buttons ─────────────────────────────────────────────
+            var mainMenu = new VBoxContainer { Name = "LobbyMainMenu" };
+            vbox.AddChild(mainMenu);
+
+            Button MakeBtn(string text) => new Button
+            {
+                Text = text, CustomMinimumSize = new Vector2(0, 40)
+            };
+
+            var btnNova      = MakeBtn("📄  Nova Campanha");
+            var btnCarregar  = MakeBtn("📂  Carregar Campanha");
+            var btnHost      = MakeBtn("🌐  Hospedar Mesa");
+            var btnJoin      = MakeBtn("🔗  Entrar em Mesa");
+            var btnSair      = MakeBtn("❌  Sair");
+
+            mainMenu.AddChild(btnNova);
+            mainMenu.AddChild(btnCarregar);
+            mainMenu.AddChild(new HSeparator());
+            mainMenu.AddChild(btnHost);
+            mainMenu.AddChild(btnJoin);
+            mainMenu.AddChild(new HSeparator());
+            mainMenu.AddChild(btnSair);
+
+            // ── Host sub-panel ────────────────────────────────────────────────
+            var hostPanel = new VBoxContainer { Name = "LobbyHostPanel", Visible = false };
+            vbox.AddChild(hostPanel);
+
+            hostPanel.AddChild(new Label { Text = "━━  Hospedar Mesa  ━━",
+                HorizontalAlignment = HorizontalAlignment.Center });
+
+            var localIp = GetLocalIP();
+            _lobbyHostIpLabel = new Label { Text = $"Seu IP: {localIp}" };
+            hostPanel.AddChild(_lobbyHostIpLabel);
+
+            var portRow  = new HBoxContainer();
+            portRow.AddChild(new Label { Text = "Porta:" });
+            var portEdit = new LineEdit { Text = "12345", CustomMinimumSize = new Vector2(100, 0) };
+            portRow.AddChild(portEdit);
+            hostPanel.AddChild(portRow);
+
+            var nameRowH = new HBoxContainer();
+            nameRowH.AddChild(new Label { Text = "Seu nome:" });
+            var nameEditH = new LineEdit { Text = "Mestre", CustomMinimumSize = new Vector2(180, 0) };
+            nameRowH.AddChild(nameEditH);
+            hostPanel.AddChild(nameRowH);
+
+            var hBtnRow  = new HBoxContainer();
+            var btnIniciar = new Button { Text = "▶  Iniciar Mesa",
+                SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            var btnVoltar1 = new Button { Text = "← Voltar" };
+            hBtnRow.AddChild(btnIniciar);
+            hBtnRow.AddChild(btnVoltar1);
+            hostPanel.AddChild(hBtnRow);
+
+            // ── Join sub-panel ────────────────────────────────────────────────
+            var joinPanel = new VBoxContainer { Name = "LobbyJoinPanel", Visible = false };
+            vbox.AddChild(joinPanel);
+
+            joinPanel.AddChild(new Label { Text = "━━  Entrar em Mesa  ━━",
+                HorizontalAlignment = HorizontalAlignment.Center });
+
+            var ipRow   = new HBoxContainer();
+            ipRow.AddChild(new Label { Text = "IP do Host:" });
+            var ipEdit  = new LineEdit { PlaceholderText = "ex: 192.168.1.10",
+                CustomMinimumSize = new Vector2(200, 0) };
+            ipRow.AddChild(ipEdit);
+            joinPanel.AddChild(ipRow);
+
+            var jPortRow  = new HBoxContainer();
+            jPortRow.AddChild(new Label { Text = "Porta:" });
+            var jPortEdit = new LineEdit { Text = "12345", CustomMinimumSize = new Vector2(100, 0) };
+            jPortRow.AddChild(jPortEdit);
+            joinPanel.AddChild(jPortRow);
+
+            var nameRowJ   = new HBoxContainer();
+            nameRowJ.AddChild(new Label { Text = "Seu nome:" });
+            var nameEditJ  = new LineEdit { Text = "Jogador",
+                CustomMinimumSize = new Vector2(180, 0) };
+            nameRowJ.AddChild(nameEditJ);
+            joinPanel.AddChild(nameRowJ);
+
+            var jBtnRow  = new HBoxContainer();
+            var btnConectar = new Button { Text = "🔗  Conectar",
+                SizeFlagsHorizontal = (int)Control.SizeFlags.ExpandFill };
+            var btnVoltar2  = new Button { Text = "← Voltar" };
+            jBtnRow.AddChild(btnConectar);
+            jBtnRow.AddChild(btnVoltar2);
+            joinPanel.AddChild(jBtnRow);
+
+            // ── Wiring ────────────────────────────────────────────────────────
+            void ShowMain()
+            {
+                mainMenu.Visible  = true;
+                hostPanel.Visible = false;
+                joinPanel.Visible = false;
+                _lobbyStatusMsg!.Text = "";
+            }
+
+            btnNova.Pressed += () =>
+            {
+                _currentCampaign = Campaign.CreateDefault();
+                LoadCampaign(_currentCampaign);
+                _lobbyOverlay!.Visible = false;
+            };
+
+            btnCarregar.Pressed += () =>
+            {
+                _lobbyOverlay!.Visible = false;
+                GetNode<FileDialog>("CampaignOpenDialog").PopupCenteredRatio();
+            };
+
+            btnSair.Pressed += () => GetTree().Quit();
+
+            btnHost.Pressed += () =>
+            {
+                mainMenu.Visible  = false;
+                hostPanel.Visible = true;
+                _lobbyHostIpLabel!.Text = $"Seu IP: {GetLocalIP()}";
+            };
+
+            btnJoin.Pressed += () =>
+            {
+                mainMenu.Visible  = false;
+                joinPanel.Visible = true;
+            };
+
+            btnVoltar1.Pressed += () => ShowMain();
+            btnVoltar2.Pressed += () => ShowMain();
+
+            btnIniciar.Pressed += () =>
+            {
+                var name = nameEditH.Text.Trim();
+                if (!string.IsNullOrEmpty(name)) _localPlayerName = name;
+                if (_playerNameInput != null) _playerNameInput.Text = _localPlayerName;
+                _localRole = RoleType.GM;
+                _chatController.PlayerName = _localPlayerName;
+
+                if (!int.TryParse(portEdit.Text.Trim(), out var port)) port = 12345;
+                var ok = _networkService.StartHost(port);
+                if (!ok)
+                {
+                    _lobbyStatusMsg!.Text = "❌ Falha ao iniciar — porta em uso?";
+                    return;
+                }
+
+                _networkService.ClientConnected    -= OnClientConnected;
+                _networkService.ClientDisconnected -= OnClientDisconnected;
+                _networkService.ClientConnected    += OnClientConnected;
+                _networkService.ClientDisconnected += OnClientDisconnected;
+
+                _mapController.ApplyVisibilityMode(true);
+                _connectedPlayers.Clear();
+                _connectedPlayers.Add(new PlayerSession
+                {
+                    Id = _networkService.LocalId, DisplayName = _localPlayerName,
+                    Role = RoleType.GM, IsConnected = true
+                });
+                UpdateSessionUI();
+                _lobbyOverlay!.Visible = false;
+                _chatController.SystemMessage(
+                    $"✅ Mesa aberta na porta {port}. Seu IP: {GetLocalIP()} — compartilhe com os jogadores.");
+            };
+
+            btnConectar.Pressed += () =>
+            {
+                var ip   = ipEdit.Text.Trim();
+                var name = nameEditJ.Text.Trim();
+                if (string.IsNullOrEmpty(ip)) { _lobbyStatusMsg!.Text = "Digite o IP do host."; return; }
+                if (!string.IsNullOrEmpty(name)) _localPlayerName = name;
+                if (_playerNameInput != null) _playerNameInput.Text = _localPlayerName;
+                _localRole = RoleType.Player;
+                _chatController.PlayerName = _localPlayerName;
+
+                if (!int.TryParse(jPortEdit.Text.Trim(), out var port)) port = 12345;
+                _lobbyStatusMsg!.Text = $"Conectando a {ip}:{port}…";
+
+                var ok = _networkService.Join(ip, port);
+                if (!ok)
+                {
+                    _lobbyStatusMsg.Text = $"❌ Falha ao conectar a {ip}:{port}";
+                    return;
+                }
+
+                _mapController.ApplyVisibilityMode(false);
+                _lobbyOverlay!.Visible = false;
+                _syncService.RequestFullState(_localPlayerName);
+                _chatController.SystemMessage($"🔗 Conectado como '{_localPlayerName}'. Aguardando estado da mesa…");
+            };
         }
 
     }

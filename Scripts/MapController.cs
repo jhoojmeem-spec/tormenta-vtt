@@ -185,6 +185,15 @@ namespace TormentaVTT.UI
             token.Sheet.PM = pm;
         }
 
+        /// <summary>
+        /// Enables or disables dragging on a specific token based on ownership.
+        /// </summary>
+        public void SetTokenInteractivity(string tokenId, bool canInteract)
+        {
+            var node = _tokenNodes.FirstOrDefault(n => n.Data.Id == tokenId);
+            if (node != null) node.CanInteract = canInteract;
+        }
+
         // ── Private ───────────────────────────────────────────────────────────
         private void SetZoom(Vector2 scale)
         {
