@@ -1,7 +1,25 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assignment goes between =
+
+config_version=5
+
 [application]
-config_version=4
+
+config/name="Tormenta VTT"
 run/main_scene="res://Scenes/Main.tscn"
-display/window/title="Tormenta VTT"
-display/window/size/width=1600
-display/window/size/height=900
-display/window/size/resizable=true
+config/features=PackedStringArray("4.4", "C#", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/size/resizable=true
+
+[dotnet]
+
+project/assembly_name="TormentaVTT"

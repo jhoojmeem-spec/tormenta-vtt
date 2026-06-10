@@ -1,4 +1,3 @@
-using Godot;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -16,11 +15,6 @@ namespace TormentaVTT.Services
     {
         private static readonly Regex TermPattern = new(@"([+-]?)(\d*d\d+(?:kh\d+|kl\d+)?|[A-Za-zÀ-ÿ]+|\d+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private readonly Random _random = new();
-
-        public DiceParser()
-        {
-            GD.Randomize();
-        }
 
         public DiceRollResult Evaluate(string expression, IReadOnlyDictionary<string, int>? variables = null)
         {

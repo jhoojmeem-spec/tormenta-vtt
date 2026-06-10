@@ -126,8 +126,8 @@ namespace TormentaVTT.UI
             GetNode<Button>("Toolbar/TopButtons/ImportTokenButton").Pressed += OnImportTokenPressed;
             GetNode<Button>("Toolbar/TopButtons/RollInitButton").Pressed += OnRollInitiativePressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/ApplyStatsButton").Pressed += OnApplyStatsPressed;
-            GetNode<Button>("SidebarPanel/SidebarVBox/AddConditionButton").Pressed += OnAddConditionPressed;
-            GetNode<Button>("SidebarPanel/SidebarVBox/RemoveConditionButton").Pressed += OnRemoveConditionPressed;
+            GetNode<Button>("SidebarPanel/SidebarVBox/ConditionRow/AddConditionButton").Pressed += OnAddConditionPressed;
+            GetNode<Button>("SidebarPanel/SidebarVBox/ConditionRow/RemoveConditionButton").Pressed += OnRemoveConditionPressed;
             GetNode<Button>("SidebarPanel/SidebarVBox/RemoveTokenButton").Pressed += OnRemoveTokenPressed;
             var assets = GetNode<ItemList>("AssetsPanel/AssetsVBox/AssetList");
             assets.ItemSelected += index => OnAssetSelected(index);
